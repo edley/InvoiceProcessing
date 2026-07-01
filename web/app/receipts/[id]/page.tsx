@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter, useParams } from "next/navigation";
 import { fetchReceipt } from "@/lib/api";
-import { ArrowLeft, RefreshCw, DollarSign, User, Hash, Calendar, Mail, FileText } from "lucide-react";
+import { ArrowLeft, RefreshCw, DollarSign, User, Hash, Calendar, Mail, FileText, Building2 } from "lucide-react";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
 
@@ -74,6 +74,14 @@ export default function ReceiptDetailPage() {
             <div className="flex items-center gap-2">
               <Mail size={16} className="text-orange-600" />
               <div><dt className="text-gray-500">Email</dt><dd className="font-medium">{receipt.payer_email || "-"}</dd></div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Building2 size={16} className="text-red-600" />
+              <div><dt className="text-gray-500">Bank</dt><dd className="font-medium">{receipt.bank_issuer || "-"}</dd></div>
+            </div>
+            <div className="flex items-center gap-2">
+              <FileText size={16} className="text-gray-600" />
+              <div><dt className="text-gray-500">Description</dt><dd className="font-medium">{receipt.description || "-"}</dd></div>
             </div>
             <div className="flex items-center gap-2">
               <Calendar size={16} className="text-red-600" />

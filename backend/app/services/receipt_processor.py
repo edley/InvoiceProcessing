@@ -17,11 +17,16 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return "\n".join(text_parts)
 
 
+def extract_currency(text: str) -> Optional[str]:
+    match = re.search(r"(?:Amount|Total)\s+([A-Z]{3})", text)
+    return match.group(1) if match else "USD"
+
+
 def extract_amount(text: str) -> Optional[float]:
     patterns = [
         r"(?:total|amount|sum|paid|due)[:\s]*\$?([\d,]+\.\d{2})",
         r"\$([\d,]+\.\d{2})",
-        r"(?:total|amount|sum|paid|due)[:\s]*([\d,]+\.\d{2})",
+        r"(?:total|amount|sum|paid|due)[:\s]*(?:[A-Z]{3}\s+)?([\d,]+\.\d{2})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -32,14 +37,43 @@ def extract_amount(text: str) -> Optional[float]:
 
 def extract_payer_name(text: str) -> Optional[str]:
     patterns = [
-        r"(?:payer|customer|from|name|bill to)[:\s]*(.+?)[\n\r]",
-        r"(?:paid by|submitted by)[:\s]*(.+?)[\n\r]",
+        r"(?:payer|customer|name|bill to|paid by|submitted by)[:\s]*(.+?)[\n\r]",
+        r"Transfer to\s*(.+?)[\n\r]",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             return match.group(1).strip()
     return None
+
+
+def extract_bank_issuer(text: str) -> Optional[str]:
+    patterns = [
+        r"(MCB\s+Ltd)",
+        r"(The\s+\w+\s+(?:Commercial|Bank|Limited))",
+        r"(Bank\s+of\s+\w+)",
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return None
+
+
+def extract_description(text: str) -> Optional[str]:
+    m = re.search(r"Description\s+(.+?)[\n\r]", text, re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def extract_notes(text: str) -> Optional[str]:
+    lines = []
+    m = re.search(r"Transfer from\s*(.+?)[\n\r]", text, re.IGNORECASE)
+    if m:
+        lines.append(f"From: {m.group(1).strip()}")
+    m = re.search(r"Type\s*(.+?)[\n\r]", text, re.IGNORECASE)
+    if m:
+        lines.append(f"Type: {m.group(1).strip()}")
+    return " | ".join(lines) if lines else None
 
 
 def extract_email(text: str) -> Optional[str]:
@@ -49,8 +83,8 @@ def extract_email(text: str) -> Optional[str]:
 
 def extract_receipt_number(text: str) -> Optional[str]:
     patterns = [
-        r"(?:receipt|invoice|ref|reference|confirmation)[\s#:]*([A-Z0-9-]{5,20})",
-        r"(?:receipt|invoice)\s*(?:no|number|#)[:\s]*([A-Z0-9-]{5,20})",
+        r"(?:Transaction\s+)?(?:reference|ref)[:\s]*([A-Z0-9]+)",
+        r"(?:receipt|invoice|confirmation)\s*(?:no|number|#)?[:\s]*([A-Z0-9-]+)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -63,7 +97,7 @@ def extract_date(text: str) -> Optional[str]:
     patterns = [
         r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
         r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})",
-        r"(?:date|paid|payment)[:\s]*(\w+ \d{1,2},?\s*\d{4})",
+        r"(?:Issued on|Payment Exported on|date|paid|payment)[:\s]*(\d{1,2}\s+\w+\s+\d{4})",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, re.IGNORECASE)
@@ -89,10 +123,13 @@ def process_proof(proof_id: str) -> dict:
             "proof_id": proof_id,
             "receipt_number": extract_receipt_number(text),
             "amount": extract_amount(text),
-            "currency": "USD",
+            "currency": extract_currency(text),
             "payer_name": extract_payer_name(text),
             "payer_email": extract_email(text),
             "payment_date": extract_date(text),
+            "bank_issuer": extract_bank_issuer(text),
+            "description": extract_description(text),
+            "notes": extract_notes(text),
             "raw_text": text[:2000],
             "status": "extracted",
             "created_at": datetime.utcnow().isoformat(),

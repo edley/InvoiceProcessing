@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { fetchReceipts } from "@/lib/api";
-import { ArrowLeft, RefreshCw, ExternalLink, DollarSign, User, Hash, Calendar } from "lucide-react";
+import { ArrowLeft, RefreshCw, ExternalLink, DollarSign, User, Hash, Calendar, Building2, FileText } from "lucide-react";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
 
@@ -16,6 +16,8 @@ interface Receipt {
   payer_name: string;
   payer_email: string;
   payment_date: string;
+  bank_issuer: string;
+  description: string;
   status: string;
   created_at: string;
 }
@@ -114,6 +116,16 @@ export default function ReceiptsPage() {
                       {r.payer_name && (
                         <span className="flex items-center gap-1 text-gray-600">
                           <User size={14} /> {r.payer_name}
+                        </span>
+                      )}
+                      {r.bank_issuer && (
+                        <span className="flex items-center gap-1 text-gray-600">
+                          <Building2 size={14} /> {r.bank_issuer}
+                        </span>
+                      )}
+                      {r.description && (
+                        <span className="flex items-center gap-1 text-gray-600">
+                          <FileText size={14} /> {r.description}
                         </span>
                       )}
                       {r.payment_date && (
