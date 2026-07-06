@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
+import threading
 from app.supabase_client import supabase
 from app.services.receipt_matcher import run_reconciliation
+from app.reconciliation_progress import get as get_progress, fail
 
 router = APIRouter()
 
@@ -20,12 +22,15 @@ class ManualMatchCreate(BaseModel):
 
 
 @router.post("/reconciliation/run")
-def trigger_reconciliation():
-    try:
-        result = run_reconciliation()
-        return {"status": "ok", **result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def trigger_reconciliation(date_from: str = None, date_to: str = None):
+    t = threading.Thread(target=run_reconciliation, args=(date_from, date_to), daemon=True)
+    t.start()
+    return {"status": "started"}
+
+
+@router.get("/reconciliation/progress")
+def reconciliation_progress():
+    return get_progress()
 
 
 @router.get("/reconciliation/results")

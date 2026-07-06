@@ -104,21 +104,74 @@ def _match_single(proof: dict, entries: list[dict]) -> Optional[dict]:
     return None
 
 
-def run_reconciliation() -> dict:
-    proofs = supabase.table("proof_of_payment_receipt").select("*").in_("status", ["extracted", "reviewed", "synced", "completed"]).execute()
-    entries = supabase.table("accounting_receipts").select("*").eq("status", "posted").execute()
+def _recon_log(proof_id: str | None, status: str, message: str):
+    if not proof_id:
+        return
+    try:
+        supabase.table("processing_log").insert({
+            "proof_id": proof_id,
+            "stage": "reconciliation",
+            "status": status,
+            "message": message[:2000],
+        }).execute()
+    except Exception:
+        pass
+
+
+def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
+    from app.reconciliation_progress import start, tick, complete, fail
+
+    start(0)
+
+    def _apply_date_range(q):
+        if date_from:
+            q = q.gte("payment_date", date_from)
+        if date_to:
+            q = q.lte("payment_date", date_to)
+        return q
+
+    tick(0, "Counting proofs and accounting entries...")
+
+    count_q = supabase.table("proof_of_payment_receipt").select("id", count="exact").in_("status", ["extracted", "reviewed", "synced", "completed"])
+    count_q = _apply_date_range(count_q)
+    proof_count_raw = count_q.execute()
+    proof_count = proof_count_raw.count if hasattr(proof_count_raw, "count") else 0
+
+    entry_count_q = supabase.table("accounting_receipts").select("id", count="exact").eq("status", "posted")
+    entry_count_q = _apply_date_range(entry_count_q)
+    entry_count_raw = entry_count_q.execute()
+    entry_count = entry_count_raw.count if hasattr(entry_count_raw, "count") else 0
+
+    total = proof_count
+    start(total)
+
+    proof_q = supabase.table("proof_of_payment_receipt").select("*").in_("status", ["extracted", "reviewed", "synced", "completed"])
+    proof_q = _apply_date_range(proof_q)
+    proofs = proof_q.execute()
+
+    entry_q = supabase.table("accounting_receipts").select("*").eq("status", "posted")
+    entry_q = _apply_date_range(entry_q)
+    entries = entry_q.execute()
 
     proof_list = proofs.data if proofs.data else []
     entry_list = entries.data if entries.data else []
 
+    _recon_log(proof_list[0].get("proof_id") if proof_list else (entry_list[0].get("id") if entry_list else None), "success",
+               f"Reconciliation started — {len(proof_list)} proofs, {len(entry_list)} entries, range: {date_from or 'any'} → {date_to or 'any'}")
+
     matched_count = 0
     unmatched_proofs = 0
     unmatched_entries = 0
+    processed = 0
 
     used_entry_ids = set()
     results = []
 
     for proof in proof_list:
+        processed += 1
+        label = proof.get("receipt_number") or proof.get("payer_name") or proof["id"][:8]
+        tick(processed, f"Matching receipt {label}")
+
         match = _match_single(proof, [e for e in entry_list if e["id"] not in used_entry_ids])
         if match:
             entry = match["entry"]
@@ -157,8 +210,12 @@ def run_reconciliation() -> dict:
             }
             results.append(result)
             matched_count += 1
+            _recon_log(proof.get("proof_id"), "success",
+                       f"Matched receipt {proof['id'][:8]} → entry {entry['id'][:8]}: {classification}, diff={amount_diff:.2f}")
         else:
             unmatched_proofs += 1
+            _recon_log(proof.get("proof_id"), "success",
+                       f"No match found for receipt {proof['id'][:8]} ({proof.get('receipt_number') or proof.get('payer_name', '')})")
             result = {
                 "proof_receipt_id": proof["id"],
                 "accounting_entry_id": None,
@@ -190,17 +247,34 @@ def run_reconciliation() -> dict:
             }
             results.append(result)
 
-    for r in results:
+    for i, r in enumerate(results):
         try:
-            existing = supabase.table("reconciliation_results").select("id").eq(
-                "proof_receipt_id", r.get("proof_receipt_id")
-            ).eq("accounting_entry_id", r.get("accounting_entry_id")).execute()
+            query = supabase.table("reconciliation_results").select("id")
+            pid = r.get("proof_receipt_id")
+            if pid:
+                query = query.eq("proof_receipt_id", pid)
+            else:
+                query = query.is_("proof_receipt_id", "null")
+            eid = r.get("accounting_entry_id")
+            if eid:
+                query = query.eq("accounting_entry_id", eid)
+            else:
+                query = query.is_("accounting_entry_id", "null")
+            existing = query.execute()
             if existing.data:
                 supabase.table("reconciliation_results").update(r).eq("id", existing.data[0]["id"]).execute()
             else:
                 supabase.table("reconciliation_results").insert(r).execute()
         except Exception as e:
             print(f"[Matcher] Save error: {e}")
+
+    complete()
+
+    log_proof_id = proof_list[0].get("proof_id") if proof_list else None
+    if not log_proof_id and entry_list:
+        log_proof_id = entry_list[0].get("id")
+    _recon_log(log_proof_id, "success",
+               f"Reconciliation complete — {matched_count} matched, {unmatched_proofs} unmatched proofs, {unmatched_entries} unmatched entries")
 
     return {
         "total_proofs": len(proof_list),

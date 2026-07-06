@@ -1,18 +1,29 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, overrideReclassification, manualMatch, fetchAccountingEntries, createAccountingEntry, updateAccountingEntry, deleteAccountingEntry } from "@/lib/api";
+import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, fetchReconciliationProgress, overrideReclassification, manualMatch, fetchAccountingEntries, createAccountingEntry, updateAccountingEntry, deleteAccountingEntry, fetchProcessingLogs } from "@/lib/api";
 import {
   Upload, FileText, Receipt, LogOut, RefreshCw, DollarSign, User, Hash, Calendar,
   Building2, CheckCircle, AlertCircle, UploadCloud, Edit3, Shield, AlertTriangle,
-  ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3, Scale, Flag, Grip
+  ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3, Scale, Flag, Grip,
+  Settings, ClipboardList, Menu, Database, Plus, Trash2, Filter, Check, History
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const TABS = ["Dashboard", "Proofs", "Receipts", "Reconciliation"] as const;
+const TABS = ["Dashboard", "Upload", "Proofs", "Receipts", "Reconciliation", "Entries", "Logs"] as const;
 type Tab = typeof TABS[number];
+
+const SIDEBAR_ITEMS: { key: Tab; label: string; icon: any }[] = [
+  { key: "Dashboard", label: "Dashboard", icon: BarChart3 },
+  { key: "Upload", label: "Upload", icon: UploadCloud },
+  { key: "Proofs", label: "Proofs", icon: FileText },
+  { key: "Receipts", label: "Receipts", icon: Receipt },
+  { key: "Reconciliation", label: "Reconciliation", icon: Scale },
+  { key: "Entries", label: "Entries", icon: Database },
+  { key: "Logs", label: "Processing Log", icon: ClipboardList },
+];
 
 const STEP_LABELS: Record<string, string> = {
   uploaded: "Uploading", ocr: "Extracting text", llm_primary: "AI extraction",
@@ -25,6 +36,9 @@ export default function HomePage() {
   const [tab, setTab] = useState<Tab>("Dashboard");
   const [filterState, setFilterState] = useState<string>("");
   const [tabKey, setTabKey] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -35,55 +49,747 @@ export default function HomePage() {
     });
   }, [router]);
 
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 768px)");
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => { if (e.matches) setMobileMenuOpen(false); };
+    handler(mql);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
   async function handleLogout() {
     await supabase.auth.signOut();
     router.push("/login");
+  }
+
+  function handleTabClick(key: Tab) {
+    setTab(key);
+    setMobileMenuOpen(false);
   }
 
   if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-gray-500">Loading...</div>;
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="border-b bg-white px-6 py-3 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-        <h1 className="text-lg font-semibold tracking-tight">tolmaiERP</h1>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-500">{user.email}</span>
-          <button onClick={handleLogout} className="flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 transition-colors">
-            <LogOut size={14} /> Sign Out
-          </button>
-        </div>
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
+      {/* Mobile header bar */}
+      <header className="md:hidden flex items-center justify-between px-4 h-14 bg-white/80 backdrop-blur-md border-b border-gray-200/60 sticky top-0 z-20 shadow-sm">
+        <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg p-1.5 transition-colors">
+          <Menu size={20} />
+        </button>
+        <span className="text-base font-bold bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">AI-Tolmai</span>
+        <button onClick={() => setShowSettings(true)}
+          className="text-gray-400 hover:text-indigo-600 hover:bg-gray-100 rounded-lg p-1.5 transition-colors">
+          <Settings size={18} />
+        </button>
       </header>
 
-      <div className="border-b bg-white px-6 flex sticky top-[49px] z-10">
-        {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-              tab === t ? "border-blue-600 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}>
-            {t === "Dashboard" && <BarChart3 size={14} className="inline mr-1.5" />}
-            {t === "Proofs" && <FileText size={14} className="inline mr-1.5" />}
-            {t === "Receipts" && <Receipt size={14} className="inline mr-1.5" />}
-            {t === "Reconciliation" && <Scale size={14} className="inline mr-1.5" />}
-            {t}
+      {/* Mobile drawer overlay */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-30 bg-black/30 md:hidden" onClick={() => setMobileMenuOpen(false)}>
+          <div className="absolute left-0 top-0 bottom-0 w-64 bg-white shadow-xl flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 h-14 border-b border-gray-100">
+              <span className="text-base font-bold bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">AI-Tolmai</span>
+              <button onClick={() => setMobileMenuOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <nav className="py-2 space-y-0.5 px-2 overflow-y-auto flex-1">
+              {SIDEBAR_ITEMS.map((item) => {
+                const Icon = item.icon;
+                const active = tab === item.key;
+                return (
+                  <button key={item.key} onClick={() => handleTabClick(item.key)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl transition-all ${
+                      active ? "bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-700 font-semibold shadow-sm border border-indigo-100/60" : "text-gray-500 hover:text-gray-700 hover:bg-gray-50/80"
+                    }`}>
+                    <Icon size={17} />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="px-2 pb-3 space-y-0.5 border-t border-gray-100 pt-2">
+              <button onClick={() => { setShowSettings(true); setMobileMenuOpen(false); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl text-gray-500 hover:text-gray-700 hover:bg-gray-50/80">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-[10px] font-bold shrink-0">
+                  {user.email?.[0]?.toUpperCase() || "U"}
+                </div>
+                <span className="truncate text-xs text-gray-600">{user.email}</span>
+              </button>
+              <button onClick={() => { handleLogout(); setMobileMenuOpen(false); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl text-gray-400 hover:text-red-600 hover:bg-red-50/50">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center"><LogOut size={17} /></div>
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Desktop Sidebar */}
+      <aside className={`hidden md:flex ${sidebarOpen ? "w-56" : "w-14"} bg-white/80 backdrop-blur-md border-r border-gray-200/60 flex-col transition-all duration-300 sticky top-0 h-screen shadow-sm`}>
+        <div className="flex items-center gap-2 px-4 h-14 border-b border-gray-100 shrink-0">
+          <button onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1.5 transition-colors">
+            <Menu size={18} />
           </button>
-        ))}
+          {sidebarOpen && (
+            <span className="text-base font-bold tracking-tight bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
+              AI-Tolmai
+            </span>
+          )}
+        </div>
+        <nav className="flex-1 py-3 space-y-0.5 px-2 overflow-y-auto">
+          {SIDEBAR_ITEMS.map((item) => {
+            const Icon = item.icon;
+            const active = tab === item.key;
+            return (
+              <button key={item.key} onClick={() => setTab(item.key)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl transition-all duration-200 ${
+                  active
+                    ? "bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-700 font-semibold shadow-sm border border-indigo-100/60"
+                    : "text-gray-500 hover:text-gray-700 hover:bg-gray-50/80"
+                }`}>
+                <div className={`shrink-0 flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
+                  active ? "bg-white shadow-sm text-indigo-600" : "text-gray-400"
+                }`}>
+                  <Icon size={17} />
+                </div>
+                {sidebarOpen && <span className="truncate">{item.label}</span>}
+              </button>
+            );
+          })}
+        </nav>
+        <div className="shrink-0 border-t border-gray-100">
+          <button onClick={() => setShowSettings(true)}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50/80 ${sidebarOpen ? "" : "justify-center"}`}>
+            <div className="shrink-0 w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-[10px] font-bold">
+              {user.email?.[0]?.toUpperCase() || "U"}
+            </div>
+            {sidebarOpen && <span className="truncate text-xs text-gray-600 flex-1 text-left">{user.email}</span>}
+          </button>
+          <button onClick={handleLogout}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm transition-all duration-200 text-gray-400 hover:text-red-600 hover:bg-red-50/50 ${sidebarOpen ? "" : "justify-center"}`}>
+            <div className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"><LogOut size={17} /></div>
+            {sidebarOpen && <span className="truncate">Sign Out</span>}
+          </button>
+        </div>
+      </aside>
+
+      {/* Desktop header + Main content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="hidden md:flex bg-white/80 backdrop-blur-md px-4 lg:px-6 py-3 border-b border-gray-200/60 items-center justify-between sticky top-0 z-10 shadow-sm">
+          <h2 className="text-lg font-semibold text-gray-800">{SIDEBAR_ITEMS.find(i => i.key === tab)?.label || tab}</h2>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 hidden lg:inline">{user.email}</span>
+            <div className="h-4 w-px bg-gray-200 hidden lg:block" />
+            <button onClick={() => setShowSettings(true)}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-indigo-600 bg-gray-50 hover:bg-indigo-50 rounded-lg px-2.5 py-1.5 transition-colors">
+              <Settings size={13} /> <span className="hidden sm:inline">Settings</span>
+            </button>
+            <button onClick={handleLogout} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-600 bg-gray-50 hover:bg-red-50 rounded-lg px-2.5 py-1.5 transition-colors">
+              <LogOut size={13} /> <span className="hidden sm:inline">Sign Out</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 mx-auto w-full max-w-6xl px-3 sm:px-4 lg:px-6 py-4 sm:py-6 pb-20 md:pb-6">
+          {tab === "Dashboard" && <DashboardTab user={user} onNavigate={(t: Tab, f?: string) => { setFilterState(f || ""); setTabKey(k => k + 1); setTab(t); }} />}
+          {tab === "Upload" && <UploadTab user={user} />}
+          {tab === "Proofs" && <ProofsTab key={`p-${tabKey}`} initialFilter={filterState} />}
+          {tab === "Receipts" && <ReceiptsTab key={`r-${tabKey}`} initialFilter={filterState} user={user} />}
+          {tab === "Reconciliation" && <ReconciliationTab />}
+          {tab === "Entries" && <AccountingEntriesTab />}
+          {tab === "Logs" && <ProcessingLogTab />}
+        </main>
       </div>
 
-      <main className="mx-auto max-w-6xl px-6 py-6">
-        {tab === "Dashboard" && <DashboardTab user={user} onNavigate={(t: Tab, f?: string) => { setFilterState(f || ""); setTabKey(k => k + 1); setTab(t); }} />}
-        {tab === "Proofs" && <ProofsTab key={`p-${tabKey}`} initialFilter={filterState} />}
-        {tab === "Receipts" && <ReceiptsTab key={`r-${tabKey}`} initialFilter={filterState} />}
-        {tab === "Reconciliation" && <ReconciliationTab />}
-      </main>
+      {showSettings && <SettingsModal user={user} onClose={() => setShowSettings(false)} />}
+
+      {/* Mobile bottom nav */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-white/90 backdrop-blur-md border-t border-gray-200/60 flex items-center justify-around px-1 pb-safe-or-0" style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
+        {SIDEBAR_ITEMS.slice(0, 5).map((item) => {
+          const Icon = item.icon;
+          const active = tab === item.key;
+          return (
+            <button key={item.key} onClick={() => setTab(item.key)}
+              className={`flex flex-col items-center gap-0.5 py-2 px-2 min-w-0 ${active ? "text-indigo-600" : "text-gray-400"}`}>
+              <Icon size={18} />
+              <span className="text-[9px] font-medium leading-none truncate max-w-full">{item.label}</span>
+            </button>
+          );
+        })}
+        {SIDEBAR_ITEMS.length > 5 && (
+          <button onClick={() => setMobileMenuOpen(true)}
+            className="flex flex-col items-center gap-0.5 py-2 px-2 text-gray-400">
+            <Menu size={18} />
+            <span className="text-[9px] font-medium">More</span>
+          </button>
+        )}
+      </nav>
     </div>
   );
 }
 
-/* ========== DASHBOARD TAB ========== */
-function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, filter?: string) => void }) {
-  const [stats, setStats] = useState({ proofs: 0, receipts: 0, review: 0, ready: 0 });
-  const [docTypeStats, setDocTypeStats] = useState<Record<string, number>>({});
+/* ========== SETTINGS MODAL ========== */
+function SettingsModal({ user, onClose }: { user: any; onClose: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [llmProvider, setLlmProvider] = useState("openai");
+  const [llmModel, setLlmModel] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [nvidiaKey, setNvidiaKey] = useState("");
+  const [nvidiaBaseUrl, setNvidiaBaseUrl] = useState("");
+  const [nvidiaModel, setNvidiaModel] = useState("");
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [savingLlm, setSavingLlm] = useState(false);
+  const [llmMsg, setLlmMsg] = useState("");
+
+  useEffect(() => {
+    fetch(`${API}/api/settings`).then(r => r.json()).then(data => {
+      if (data.llm_provider) setLlmProvider(data.llm_provider);
+      if (data.llm_model) setLlmModel(data.llm_model);
+      if (data.openai_api_key) setOpenaiKey(data.openai_api_key);
+      if (data.nvidia_api_key) setNvidiaKey(data.nvidia_api_key);
+      if (data.nvidia_base_url) setNvidiaBaseUrl(data.nvidia_base_url);
+      if (data.nvidia_model) setNvidiaModel(data.nvidia_model);
+      setSettingsLoaded(true);
+    }).catch(() => setSettingsLoaded(true));
+  }, []);
+
+  async function handleResetPassword() {
+    setMsg("");
+    if (!password || password.length < 6) { setMsg("Password must be at least 6 characters"); return; }
+    if (password !== confirm) { setMsg("Passwords do not match"); return; }
+    setSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw new Error(error.message);
+      setMsg("Password updated successfully");
+      setPassword("");
+      setConfirm("");
+    } catch (e: any) { setMsg(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleSaveLlm() {
+    setLlmMsg("");
+    setSavingLlm(true);
+    try {
+      const body: any = { llm_provider: llmProvider, llm_model: llmModel };
+      if (openaiKey) body.openai_api_key = openaiKey;
+      if (nvidiaKey) body.nvidia_api_key = nvidiaKey;
+      if (nvidiaBaseUrl) body.nvidia_base_url = nvidiaBaseUrl;
+      if (nvidiaModel) body.nvidia_model = nvidiaModel;
+      const res = await fetch(`${API}/api/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error("Failed to save settings");
+      setLlmMsg("LLM settings saved");
+    } catch (e: any) { setLlmMsg(e.message); }
+    finally { setSavingLlm(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30" onClick={onClose}>
+      <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl p-5 sm:p-6 w-full sm:max-w-md mx-0 sm:mx-4 max-h-[90vh] overflow-y-auto sm:min-h-0" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Settings</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="text-xs text-gray-500 mb-4">{user.email}</div>
+
+        {/* Password section */}
+        <div className="border-b pb-4 mb-4">
+          <h4 className="text-sm font-semibold text-gray-700 mb-3">Change Password</h4>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">New Password</label>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="Min 6 characters" />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Confirm Password</label>
+              <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="Repeat password" />
+            </div>
+            {msg && <p className={`text-xs ${msg.includes("success") ? "text-green-600" : "text-red-600"}`}>{msg}</p>}
+            <button onClick={handleResetPassword} disabled={saving}
+              className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+              {saving ? "Updating..." : "Change Password"}
+            </button>
+          </div>
+        </div>
+
+        {/* LLM Configuration section */}
+        {settingsLoaded && (
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-3">LLM Configuration</h4>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Provider</label>
+                <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none bg-white">
+                  <option value="openai">OpenAI</option>
+                  <option value="nvidia">NVIDIA</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Model</label>
+                <input type="text" value={llmModel} onChange={(e) => setLlmModel(e.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder={llmProvider === "openai" ? "gpt-4o-mini" : "nvidia/llama-3.1-nemotron-70b-instruct"} />
+              </div>
+              {llmProvider === "openai" ? (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">OpenAI API Key</label>
+                  <input type="password" value={openaiKey} onChange={(e) => setOpenaiKey(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="sk-..." />
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">NVIDIA API Key</label>
+                    <input type="password" value={nvidiaKey} onChange={(e) => setNvidiaKey(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="nvapi-..." />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">NVIDIA Base URL</label>
+                    <input type="text" value={nvidiaBaseUrl} onChange={(e) => setNvidiaBaseUrl(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="https://integrate.api.nvidia.com/v1" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">NVIDIA Model</label>
+                    <input type="text" value={nvidiaModel} onChange={(e) => setNvidiaModel(e.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 outline-none" placeholder="nvidia/llama-3.1-nemotron-70b-instruct" />
+                  </div>
+                </>
+              )}
+              {llmMsg && <p className={`text-xs ${llmMsg.includes("saved") ? "text-green-600" : "text-red-600"}`}>{llmMsg}</p>}
+              <button onClick={handleSaveLlm} disabled={savingLlm}
+                className="w-full flex items-center justify-center gap-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
+                {savingLlm ? <Loader2 size={14} className="animate-spin" /> : null}
+                {savingLlm ? "Saving..." : "Save LLM Settings"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ========== ACCOUNTING ENTRIES TAB ========== */
+function AccountingEntriesTab() {
+  const [entries, setEntries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<any>({ amount: "", currency: "USD", status: "posted" });
+  const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  useEffect(() => { loadEntries(); }, [dateFrom, dateTo, statusFilter]);
+
+  async function loadEntries() {
+    setLoading(true);
+    try {
+      const data = await fetchAccountingEntries({
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        status: statusFilter || undefined,
+        page_size: 200,
+      });
+      setEntries(data.items || []);
+    } catch { setEntries([]); }
+    finally { setLoading(false); }
+  }
+
+  function resetForm() {
+    setForm({ amount: "", currency: "USD", receipt_number: "", payer_name: "", payment_date: "", description: "", vendor: "", cost_center: "", account_code: "", status: "posted", notes: "" });
+  }
+
+  function startCreate() {
+    resetForm();
+    setEditingId(null);
+    setShowForm(true);
+  }
+
+  function startEdit(e: any) {
+    setForm({
+      amount: e.amount ?? "",
+      currency: e.currency ?? "USD",
+      receipt_number: e.receipt_number ?? "",
+      payer_name: e.payer_name ?? "",
+      payment_date: e.payment_date ?? "",
+      description: e.description ?? "",
+      vendor: e.vendor ?? "",
+      cost_center: e.cost_center ?? "",
+      account_code: e.account_code ?? "",
+      status: e.status ?? "posted",
+      notes: e.notes ?? "",
+    });
+    setEditingId(e.id);
+    setShowForm(true);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const payload = { ...form };
+      if (payload.amount) payload.amount = parseFloat(payload.amount);
+      if (editingId) {
+        await updateAccountingEntry(editingId, payload);
+      } else {
+        await createAccountingEntry(payload);
+      }
+      setShowForm(false);
+      setEditingId(null);
+      loadEntries();
+    } catch (e: any) { alert(e.message); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteAccountingEntry(id);
+      setConfirmDelete(null);
+      loadEntries();
+    } catch (e: any) { alert(e.message); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Accounting Entries</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={loadEntries} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" />Refresh</button>
+          <button onClick={startCreate} className="flex items-center gap-1 text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700"><Plus size={14} />Add Entry</button>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="mb-4 flex gap-2 flex-wrap items-center">
+        <div className="flex items-center gap-1.5">
+          <Filter size={14} className="text-gray-400" />
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="From date" />
+          <span className="text-xs text-gray-400">—</span>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="To date" />
+        </div>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+          className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none bg-white">
+          <option value="">All Statuses</option>
+          <option value="posted">Posted</option>
+          <option value="pending">Pending</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        {(dateFrom || dateTo || statusFilter) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); setStatusFilter(""); }}
+            className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5 border rounded-lg">Clear</button>
+        )}
+        <span className="text-xs text-gray-400 ml-auto">{entries.length} entries</span>
+      </div>
+
+      {/* Create/Edit Form */}
+      {showForm && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">{editingId ? "Edit Entry" : "New Entry"}</h3>
+            <button onClick={() => { setShowForm(false); setEditingId(null); }} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {[
+              { label: "Amount *", key: "amount", type: "number" },
+              { label: "Currency", key: "currency" },
+              { label: "Receipt #", key: "receipt_number" },
+              { label: "Payer Name", key: "payer_name" },
+              { label: "Payment Date", key: "payment_date", type: "date" },
+              { label: "Vendor", key: "vendor" },
+              { label: "Cost Center", key: "cost_center" },
+              { label: "Account Code", key: "account_code" },
+              { label: "Status", key: "status" },
+            ].map((f) => (
+              <div key={f.key}>
+                <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
+                {f.key === "status" ? (
+                  <select value={form[f.key] || "posted"} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none bg-white">
+                    <option value="posted">Posted</option>
+                    <option value="pending">Pending</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                ) : (
+                  <input type={f.type || "text"} value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none" />
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3">
+            <label className="block text-xs text-gray-500 mb-0.5">Description</label>
+            <textarea value={form.description ?? ""} onChange={(e) => setForm({ ...form, description: e.target.value })}
+              className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none" rows={2} />
+          </div>
+          <div className="mt-3">
+            <label className="block text-xs text-gray-500 mb-0.5">Notes</label>
+            <textarea value={form.notes ?? ""} onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none" rows={2} />
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={() => { setShowForm(false); setEditingId(null); }}
+              className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>
+            <button onClick={handleSave} disabled={saving || !form.amount}
+              className="flex items-center gap-1 text-xs text-white bg-blue-600 px-4 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {saving ? "Saving..." : editingId ? "Update Entry" : "Create Entry"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      {loading ? <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+      : entries.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-gray-200 p-10 text-center">
+          <Database size={32} className="mx-auto text-gray-300 mb-3" />
+          <p className="text-sm text-gray-500 mb-1">No accounting entries found</p>
+          <p className="text-xs text-gray-400 mb-4">Adjust date filters or create a new entry</p>
+          <button onClick={startCreate} className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"><Plus size={14} className="inline mr-1" />Add Entry</button>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                <th className="px-3 py-2.5 whitespace-nowrap">Receipt #</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Amount</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Payer</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Vendor</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Date</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">CC</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">AC</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Status</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Description</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-24 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id} className="border-b last:border-0 hover:bg-gray-50 transition-colors">
+                  <td className="px-3 py-2.5 font-medium text-gray-800 whitespace-nowrap">{e.receipt_number || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-gray-800">
+                    {e.amount != null ? `${Number(e.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${e.currency || "USD"}` : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[120px] truncate" title={e.payer_name}>{e.payer_name || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[100px] truncate" title={e.vendor}>{e.vendor || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{e.payment_date || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{e.cost_center || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{e.account_code || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <span className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded-full ${
+                      e.status === "posted" ? "bg-green-50 text-green-700" :
+                      e.status === "pending" ? "bg-yellow-50 text-yellow-700" :
+                      e.status === "cancelled" ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"
+                    }`}>{e.status}</span>
+                  </td>
+                  <td className="px-3 py-2.5 max-w-[160px] truncate text-gray-500" title={e.description || e.notes}>{e.description || e.notes || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <button onClick={() => startEdit(e)} className="text-gray-400 hover:text-blue-600 p-1" title="Select"><Check size={14} /></button>
+                      <button onClick={() => startEdit(e)} className="text-gray-400 hover:text-amber-600 p-1" title="Amend"><Edit3 size={14} /></button>
+                      {confirmDelete === e.id ? (
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => handleDelete(e.id)} className="text-red-600 hover:text-red-800 p-1" title="Confirm Delete"><Check size={14} /></button>
+                          <button onClick={() => setConfirmDelete(null)} className="text-gray-400 hover:text-gray-600 p-1" title="Cancel"><X size={14} /></button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmDelete(e.id)} className="text-gray-400 hover:text-red-600 p-1" title="Delete"><Trash2 size={14} /></button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== PROCESSING LOG TAB ========== */
+function ProcessingLogTab() {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [search, setSearch] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  useEffect(() => { loadLogs(); }, [page, dateFrom, dateTo, search, stageFilter]);
+
+  const STAGES = ["", "upload", "ocr", "classify", "llm_primary", "llm_fallback", "regex", "routing", "erp_sync", "reconciliation", "reconciliation_analysis", "extraction"];
+
+  async function loadLogs() {
+    setLoading(true);
+    try {
+      const data = await fetchProcessingLogs({
+        page, page_size: 50,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        search: search || undefined,
+        stage: stageFilter || undefined,
+      });
+      setLogs(data.items || []);
+      setTotal(data.total || 0);
+    } catch { setLogs([]); }
+    finally { setLoading(false); }
+  }
+
+  const STAGE_COLORS: Record<string, string> = {
+    upload: "bg-blue-50 text-blue-700",
+    ocr: "bg-gray-50 text-gray-700",
+    classify: "bg-purple-50 text-purple-700",
+    llm_primary: "bg-indigo-50 text-indigo-700",
+    llm_fallback: "bg-amber-50 text-amber-700",
+    regex: "bg-orange-50 text-orange-700",
+    routing: "bg-cyan-50 text-cyan-700",
+    erp_sync: "bg-emerald-50 text-emerald-700",
+    reconciliation: "bg-blue-50 text-blue-700",
+    reconciliation_analysis: "bg-violet-50 text-violet-700",
+    extraction: "bg-green-50 text-green-700",
+  };
+
+  function formatMessage(msg: string | null) {
+    if (!msg) return "—";
+    try {
+      const parsed = JSON.parse(msg);
+      return typeof parsed === "object" ? JSON.stringify(parsed, null, 2) : msg;
+    } catch {
+      return msg;
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h2 className="text-xl font-bold">Processing Log</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input type="text" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Search..."
+              className="rounded-lg border border-gray-300 pl-7 pr-3 py-1.5 text-xs focus:border-blue-500 outline-none w-36" />
+          </div>
+          <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" />
+          <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" />
+          <button onClick={loadLogs} className="text-xs text-gray-500 hover:text-blue-600 bg-white border rounded-lg px-2.5 py-1.5"><RefreshCw size={12} className="inline mr-1" /> Refresh</button>
+        </div>
+      </div>
+      <div className="mb-3 flex gap-1.5 flex-wrap">
+        {STAGES.map((s) => (
+          <button key={s} onClick={() => { setStageFilter(s); setPage(1); }}
+            className={`rounded-full px-2.5 py-1 text-[10px] font-medium transition-colors ${
+              stageFilter === s ? "bg-indigo-600 text-white shadow-sm" : "bg-white border border-gray-200 text-gray-500 hover:bg-gray-50"
+            }`}>
+            {s ? s.replace(/_/g, " ") : "All"}
+          </button>
+        ))}
+        {(dateFrom || dateTo || search || stageFilter) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); setSearch(""); setStageFilter(""); setPage(1); }}
+            className="text-[10px] text-gray-400 hover:text-red-600 px-2 py-1 border border-gray-200 rounded-full">Clear</button>
+        )}
+        <span className="text-[10px] text-gray-400 ml-auto self-center">{total} entries</span>
+      </div>
+
+      {loading ? <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+      : logs.length === 0 ? <div className="rounded-xl border-2 border-dashed border-gray-200 p-8 text-center text-sm text-gray-400">No log entries found.</div>
+      : (
+        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                <th className="px-3 py-2.5 whitespace-nowrap w-24">Stage</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-16">Status</th>
+                <th className="px-3 py-2.5">Message</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-36">Created At</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-10"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((log) => {
+                const isExpanded = expandedId === log.id;
+                return (
+                  <Fragment key={log.id}>
+                    <tr className={`border-b last:border-0 hover:bg-gray-50 transition-colors ${log.status === "failure" ? "bg-red-50/20" : ""}`}>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded ${STAGE_COLORS[log.stage] || "bg-gray-50 text-gray-600"}`}>
+                          {log.stage?.replace(/_/g, " ") || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                          log.status === "success" ? "bg-green-50 text-green-700" :
+                          log.status === "failure" ? "bg-red-50 text-red-700" :
+                          "bg-gray-50 text-gray-600"
+                        }`}>{log.status || "—"}</span>
+                      </td>
+                      <td className="px-3 py-2.5 max-w-[400px]">
+                        <p className="text-gray-700 truncate" title={log.message || ""}>{log.message ? (log.message.length > 120 ? log.message.slice(0, 120) + "..." : log.message) : "—"}</p>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-500">
+                        {log.created_at ? new Date(log.created_at).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <button onClick={() => setExpandedId(isExpanded ? null : log.id)}
+                          className="text-gray-400 hover:text-indigo-600 p-1 transition-colors" title="View details">
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${log.id}-detail`}>
+                        <td colSpan={5} className="px-3 pb-3">
+                          <div className="rounded-lg bg-gray-50 border p-3 text-xs font-mono text-gray-700 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
+                            {formatMessage(log.message)}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+          {total > 50 && (
+            <div className="flex items-center justify-center gap-2 p-3 border-t">
+              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}
+                className="text-xs text-gray-500 px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-30 transition-colors">Previous</button>
+              <span className="text-xs text-gray-400">Page {page} of {Math.ceil(total / 50)}</span>
+              <button disabled={page >= Math.ceil(total / 50)} onClick={() => setPage(p => p + 1)}
+                className="text-xs text-gray-500 px-2 py-1 border rounded hover:bg-gray-50 disabled:opacity-30 transition-colors">Next</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== UPLOAD TAB ========== */
+function UploadTab({ user }: { user: any }) {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
@@ -91,42 +797,18 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
   const [progress, setProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState("");
   const [dragOver, setDragOver] = useState(false);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
   const [uploadResults, setUploadResults] = useState<{name: string; status: string}[]>([]);
   const [uploadIndex, setUploadIndex] = useState(0);
   const pollRef = useRef<any>(null);
 
   useEffect(() => {
-    loadStats();
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [dateFrom, dateTo]);
+  }, []);
 
-  function dateParams() {
-    const p = new URLSearchParams({ page: "1", page_size: "1" });
-    if (dateFrom) p.set("date_from", dateFrom);
-    if (dateTo) p.set("date_to", dateTo);
-    return p.toString();
-  }
-
-  async function loadStats() {
-    try {
-      const [pr, rr, rv, rd, ...dtRes] = await Promise.all([
-        fetch(`${API}/api/proofs?${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/receipts?${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/receipts?status=review_needed&${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/proofs?status=ready_to_process&${dateParams()}`).then(r => r.json()),
-        ...["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"].map(
-          dt => fetch(`${API}/api/proofs?document_type=${dt}&${dateParams()}`).then(r => r.json())
-        ),
-      ]);
-      setStats({ proofs: pr.total || 0, receipts: rr.total || 0, review: rv.total || 0, ready: rd.total || 0 });
-      const dtLabels = ["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"];
-      const dtMap: Record<string, number> = {};
-      dtRes.forEach((d, i) => { if (d.total > 0) dtMap[dtLabels[i]] = d.total; });
-      setDocTypeStats(dtMap);
-    } catch (_) {}
-  }
+  const STEP_LABELS_LOCAL: Record<string, string> = {
+    uploaded: "Uploading", ocr: "Extracting text", llm_primary: "AI extraction",
+    llm_fallback: "AI fallback", regex: "Regex extraction", routing: "Saving result", done: "Complete",
+  };
 
   function startPolling(id: string) {
     setProofId(id);
@@ -154,7 +836,6 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
           setCurrentStep("done");
           setUploading(false);
           setFiles([]);
-          loadStats();
         }
       } catch (_) {}
     }, 2000);
@@ -198,13 +879,217 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
     setFiles([]);
     setUploading(false);
     setProofId(null);
-    loadStats();
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto px-0 sm:px-1">
+      <div className="flex items-center justify-between mb-4 sm:mb-6">
+        <h2 className="text-lg sm:text-xl font-bold">Upload Documents</h2>
+        <p className="text-[10px] sm:text-xs text-gray-400">PDF only</p>
+      </div>
+
+      {/* Drop zone */}
+      {!uploading && !proofId && (
+        <div
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); setFiles(Array.from(e.dataTransfer.files).filter(f => f.type === "application/pdf")); if (Array.from(e.dataTransfer.files).some(f => f.type !== "application/pdf")) setError("Non-PDF files ignored"); }}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          className={`relative rounded-2xl border-2 border-dashed p-8 sm:p-12 text-center cursor-pointer transition-all ${
+            dragOver ? "border-blue-500 bg-blue-50 scale-[1.02]" : "border-gray-300 bg-white hover:border-blue-400 hover:shadow-lg"
+          }`}>
+          <div className={`absolute inset-0 rounded-2xl transition-opacity ${dragOver ? "bg-blue-50/50" : "opacity-0"}`} />
+          <div className="relative">
+            <div className={`mx-auto mb-4 w-16 h-16 rounded-2xl flex items-center justify-center transition-colors ${dragOver ? "bg-blue-100" : "bg-gray-100"}`}>
+              <Upload size={28} className={dragOver ? "text-blue-600" : "text-gray-400"} />
+            </div>
+            <p className="text-sm font-medium text-gray-700 mb-1">
+              {dragOver ? "Drop files here" : "Drag & drop PDF files here"}
+            </p>
+            <p className="text-xs text-gray-400 mb-4">or</p>
+            <label className="inline-flex items-center gap-2 cursor-pointer rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 shadow-sm hover:shadow-md transition-all">
+              <UploadCloud size={16} />
+              Browse Files
+              <input type="file" accept=".pdf" multiple className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+            </label>
+          </div>
+        </div>
+      )}
+
+      {/* Selected files list */}
+      {files.length > 0 && !uploading && (
+        <div className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-semibold text-gray-700">{files.length} file{files.length > 1 ? "s" : ""} selected</span>
+            <button onClick={() => setFiles([])} className="text-xs text-gray-500 hover:text-red-600">Clear all</button>
+          </div>
+          <div className="space-y-1.5">
+            {files.map((f, i) => (
+              <div key={i} className="flex items-center gap-3 rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                <FileText size={14} className="text-gray-400" />
+                <span className="flex-1 truncate text-gray-700">{f.name}</span>
+                <span className="text-xs text-gray-400">{(f.size / 1024).toFixed(1)} KB</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={handleUpload}
+            className="mt-3 w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 shadow-sm hover:shadow-md transition-all">
+            <UploadCloud size={16} />
+            Upload & Process {files.length > 1 ? `(${files.length} files)` : ""}
+          </button>
+        </div>
+      )}
+
+      {/* Progress indicator */}
+      {uploading && currentStep !== "done" && (
+        <div className="mt-6 rounded-2xl border bg-white p-6 shadow-lg">
+          {/* Animated icon + progress ring */}
+          <div className="flex items-center gap-4 mb-4">
+            <div className="relative shrink-0">
+              <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
+                <circle cx="28" cy="28" r="24" fill="none" stroke="#e5e7eb" strokeWidth="4" />
+                <circle cx="28" cy="28" r="24" fill="none" stroke="url(#progGrad)" strokeWidth="4"
+                  strokeLinecap="round" strokeDasharray={`${2 * Math.PI * 24}`}
+                  strokeDashoffset={`${2 * Math.PI * 24 * (1 - progress / 100)}`}
+                  className="transition-all duration-700 ease-out" />
+                <defs>
+                  <linearGradient id="progGrad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="#6366f1" />
+                    <stop offset="100%" stopColor="#8b5cf6" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 size="20" className="text-indigo-500 animate-spin" />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-gray-700">
+                Processing {uploadIndex + 1} of {files.length}
+              </p>
+              <p className="text-xs text-indigo-600 font-medium mt-0.5">
+                {STEP_LABELS_LOCAL[currentStep] || "Processing..."}
+              </p>
+            </div>
+            <div className="text-right">
+              <div className="text-lg font-bold text-indigo-600">{Math.round(progress)}%</div>
+              <div className="text-[10px] text-gray-400">complete</div>
+            </div>
+          </div>
+
+          {/* Step indicators */}
+          <div className="flex items-center gap-1">
+            {["uploaded","ocr","llm_primary","routing"].map((s, i) => {
+              const isActive = currentStep === s;
+              const isDone = ["uploaded","ocr","llm_primary","routing"].indexOf(currentStep) > i;
+              return (
+                <div key={s} className="flex-1 flex items-center gap-1">
+                  <div className={`flex items-center justify-center w-6 h-6 rounded-full text-[10px] font-bold transition-all ${
+                    isDone ? "bg-indigo-500 text-white" :
+                    isActive ? "bg-indigo-100 text-indigo-700 ring-2 ring-indigo-300" :
+                    "bg-gray-100 text-gray-400"
+                  }`}>
+                    {isDone ? <Check size={12} /> : i + 1}
+                  </div>
+                  {i < 3 && <div className={`flex-1 h-0.5 rounded ${isDone ? "bg-indigo-400" : "bg-gray-200"}`} />}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex text-[10px] text-gray-400 mt-1 px-0.5">
+            {["Upload","OCR","Extract","Save"].map((l, i) => (
+              <div key={l} className={`flex-1 ${i === 0 ? "text-left" : i === 3 ? "text-right" : "text-center"}`}>{l}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upload results */}
+      {uploadResults.length > 0 && !uploading && (
+        <div className="mt-4 rounded-xl border bg-white p-4 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Upload Results</h3>
+          <div className="space-y-1.5">
+            {uploadResults.map((r, i) => (
+              <div key={i} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm ${
+                r.status === "done" ? "bg-green-50 text-green-700" :
+                r.status === "failed" ? "bg-red-50 text-red-600" :
+                "bg-gray-50 text-gray-500"
+              }`}>
+                {r.status === "done" ? <CheckCircle size={14} /> : r.status === "failed" ? <AlertCircle size={14} /> : <Loader2 size={14} className="animate-spin" />}
+                <span className="flex-1 truncate">{r.name}</span>
+                <span className="text-xs font-medium">{r.status}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => { setUploadResults([]); setFiles([]); setProofId(null); }}
+            className="mt-3 w-full rounded-xl border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+            Upload More
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-4 flex items-center gap-2 rounded-xl bg-red-50 p-4 text-sm text-red-600 border border-red-200">
+          <AlertCircle size={16} className="shrink-0" /> {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== DASHBOARD TAB ========== */
+function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, filter?: string) => void }) {
+  const [stats, setStats] = useState({ proofs: 0, receipts: 0, review: 0, ready: 0 });
+  const [docTypeStats, setDocTypeStats] = useState<Record<string, number>>({});
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  useEffect(() => { loadStats(); }, [dateFrom, dateTo]);
+
+  function dateParams() {
+    const p = new URLSearchParams({ page: "1", page_size: "1" });
+    if (dateFrom) p.set("date_from", dateFrom);
+    if (dateTo) p.set("date_to", dateTo);
+    return p.toString();
+  }
+
+  async function loadStats() {
+    try {
+      const [pr, rr, rv, rd, ...dtRes] = await Promise.all([
+        fetch(`${API}/api/proofs?${dateParams()}`).then(r => r.json()),
+        fetch(`${API}/api/receipts?${dateParams()}`).then(r => r.json()),
+        fetch(`${API}/api/receipts?status=review_needed&${dateParams()}`).then(r => r.json()),
+        fetch(`${API}/api/proofs?status=ready_to_process&${dateParams()}`).then(r => r.json()),
+        ...["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"].map(
+          dt => fetch(`${API}/api/proofs?document_type=${dt}&${dateParams()}`).then(r => r.json())
+        ),
+      ]);
+      setStats({ proofs: pr.total || 0, receipts: rr.total || 0, review: rv.total || 0, ready: rd.total || 0 });
+      const dtLabels = ["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"];
+      const dtMap: Record<string, number> = {};
+      dtRes.forEach((d, i) => { if (d.total > 0) dtMap[dtLabels[i]] = d.total; });
+      setDocTypeStats(dtMap);
+    } catch (_) {}
   }
 
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold">Dashboard</h2>
-      <div className="grid gap-4 sm:grid-cols-4">
+
+      {/* Date filter */}
+      <div className="flex items-center gap-3">
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+        <span className="text-xs text-gray-400">—</span>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+        {(dateFrom || dateTo) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); }}
+            className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5 border rounded-lg">Clear</button>
+        )}
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {[
           { label: "Total Proofs", value: stats.proofs, icon: FileText, color: "text-blue-600 bg-blue-50", tab: "Proofs" as Tab, filter: "" },
           { label: "Total Receipts", value: stats.receipts, icon: Receipt, color: "text-purple-600 bg-purple-50", tab: "Receipts" as Tab, filter: "" },
@@ -219,21 +1104,13 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
         ))}
       </div>
 
-      <div className="flex items-center gap-3">
-        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none" title="From date" />
-        <span className="text-xs text-gray-400">—</span>
-        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none" title="To date" />
-        {(dateFrom || dateTo) && (
-          <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-            className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5 border rounded-lg">Clear</button>
-        )}
-      </div>
-
+      {/* Document type distribution */}
       {Object.keys(docTypeStats).length > 0 && (
         <div className="rounded-xl border bg-white p-5 shadow-sm">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Document Types</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700">Document Types</h3>
+            <span className="text-xs text-gray-400">{Object.values(docTypeStats).reduce((a, b) => a + b, 0)} total</span>
+          </div>
           <div className="flex flex-wrap gap-2">
             {Object.entries(docTypeStats).map(([dt, count]) => (
               <button key={dt} onClick={() => onNavigate("Proofs", dt)}
@@ -248,60 +1125,6 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
           </div>
         </div>
       )}
-
-      <div className="rounded-xl border bg-white p-6 shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-700 mb-4 flex items-center gap-2"><UploadCloud size={16} /> Upload Payment Proof</h3>
-        {proofId && currentStep !== "done" ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-3"><Loader2 size={20} className="animate-spin text-blue-600" /><span className="text-sm text-gray-600">{STEP_LABELS[currentStep] || "Processing..."}</span></div>
-            <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out" style={{ width: `${progress}%` }} /></div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div onDrop={(e) => { e.preventDefault(); setDragOver(false); setFiles(Array.from(e.dataTransfer.files).filter(f => f.type === "application/pdf")); if (Array.from(e.dataTransfer.files).some(f => f.type !== "application/pdf")) setError("Non-PDF files ignored"); }}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)}
-              className={`rounded-lg border-2 border-dashed p-8 text-center cursor-pointer transition-colors ${dragOver ? "border-blue-500 bg-blue-50" : "border-gray-300 hover:border-blue-400"}`}>
-              <Upload size={32} className="mx-auto text-gray-400 mb-3" />
-              <p className="text-sm text-gray-600 mb-1">Drag & drop PDFs here</p>
-              <p className="text-xs text-gray-400 mb-3">or</p>
-              <label className="inline-block cursor-pointer rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
-                Browse Files
-                <input type="file" accept=".pdf" multiple className="hidden" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
-              </label>
-              {files.length > 0 && (
-                <div className="mt-3 space-y-1">
-                  {files.map((f, i) => (
-                    <p key={i} className="text-sm text-gray-700">{f.name} ({(f.size / 1024).toFixed(1)} KB)</p>
-                  ))}
-                </div>
-              )}
-            </div>
-            {uploadResults.length > 0 && (
-              <div className="space-y-1.5">
-                {uploadResults.map((r, i) => (
-                  <div key={i} className={`flex items-center gap-2 text-sm rounded-lg px-3 py-2 ${
-                    r.status === "done" ? "bg-green-50 text-green-700" :
-                    r.status === "failed" ? "bg-red-50 text-red-600" :
-                    r.status === "uploading" && i === uploadIndex ? "bg-blue-50 text-blue-700" :
-                    "bg-gray-50 text-gray-500"
-                  }`}>
-                    {r.status === "done" ? <CheckCircle size={14} /> : r.status === "failed" ? <AlertCircle size={14} /> : <Loader2 size={14} className="animate-spin" />}
-                    {r.name}
-                  </div>
-                ))}
-              </div>
-            )}
-            {error && <div className="flex items-center gap-2 rounded bg-red-50 p-3 text-sm text-red-600"><AlertCircle size={16} /> {error}</div>}
-            {uploading && (
-              <div className="flex items-center gap-3"><Loader2 size={20} className="animate-spin text-blue-600" /><span className="text-sm text-gray-600">Processing {uploadIndex + 1} of {files.length}...</span></div>
-            )}
-            <button onClick={handleUpload} disabled={!files.length || uploading}
-              className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
-              {uploading ? `Uploading ${uploadIndex + 1}/${files.length}...` : files.length > 0 ? `Upload ${files.length} PDF${files.length > 1 ? "s" : ""}` : "Upload & Process"}
-            </button>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -325,7 +1148,7 @@ function ProofsTab({ initialFilter = "" }: { initialFilter?: string }) {
   async function loadProofs() {
     setLoading(true);
     try {
-      const p = new URLSearchParams({ page: "1", page_size: "50" });
+      const p = new URLSearchParams({ page: "1", page_size: "100" });
       if (filter) p.set("status", filter);
       if (docTypeFilter) p.set("document_type", docTypeFilter);
       if (dateFrom) p.set("date_from", dateFrom);
@@ -341,7 +1164,7 @@ function ProofsTab({ initialFilter = "" }: { initialFilter?: string }) {
     setExpandedId(proofId);
     if (!receipts[proofId]) {
       try {
-        const res = await fetch(`${API}/api/receipts?page=1&page_size=50`);
+        const res = await fetch(`${API}/api/receipts?page=1&page_size=100`);
         const d = await res.json();
         const match = (d.items || []).find((r: any) => r.proof_id === proofId);
         if (match) {
@@ -373,28 +1196,29 @@ function ProofsTab({ initialFilter = "" }: { initialFilter?: string }) {
   }
 
   const statusColors: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800", processing: "bg-blue-100 text-blue-800",
-    completed: "bg-green-100 text-green-800", review_needed: "bg-orange-100 text-orange-800",
-    failed: "bg-red-100 text-red-800", ready_to_process: "bg-emerald-100 text-emerald-800",
+    pending: "bg-yellow-50 text-yellow-700", processing: "bg-blue-50 text-blue-700",
+    completed: "bg-green-50 text-green-700", review_needed: "bg-orange-50 text-orange-700",
+    failed: "bg-red-50 text-red-700", ready_to_process: "bg-emerald-50 text-emerald-700",
   };
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold">Proofs & Receipts</h2>
+        <h2 className="text-xl font-bold">Proofs</h2>
         <button onClick={loadProofs} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" /> Refresh</button>
       </div>
+
+      {/* Filters */}
       <div className="mb-4 flex gap-2 flex-wrap items-center">
-        {["", "pending", "completed", "review_needed", "ready_to_process", "failed"].map((s) => (
-          <button key={s} onClick={() => setFilter(s)}
-            className={`rounded-full px-3 py-1 text-xs ${filter === s ? "bg-blue-600 text-white" : "bg-white border text-gray-600 hover:bg-gray-50"}`}>
-            {s ? s.replace(/_/g, " ") : "All"}
-          </button>
-        ))}
-      </div>
-      <div className="mb-4 flex gap-2 flex-wrap items-center">
+        <div className="flex items-center gap-1.5">
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="From date" />
+          <span className="text-xs text-gray-400">—</span>
+          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="To date" />
+        </div>
         <select value={docTypeFilter} onChange={e => setDocTypeFilter(e.target.value)}
-          className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none bg-white">
+          className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none bg-white">
           <option value="">All Types</option>
           <option value="receipt">Receipt</option>
           <option value="invoice">Invoice</option>
@@ -406,152 +1230,169 @@ function ProofsTab({ initialFilter = "" }: { initialFilter?: string }) {
           <option value="other">Other</option>
           <option value="unclassified">Unclassified</option>
         </select>
-        <div className="ml-auto flex items-center gap-2">
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" title="From date" />
-          <span className="text-xs text-gray-400">—</span>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 focus:outline-none" title="To date" />
-          {(dateFrom || dateTo) && (
-            <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-              className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5">Clear</button>
-          )}
-        </div>
+        {["", "pending", "completed", "review_needed", "ready_to_process", "failed"].map((s) => (
+          <button key={s} onClick={() => setFilter(s)}
+            className={`rounded-full px-3 py-1 text-xs ${filter === s ? "bg-blue-600 text-white" : "bg-white border text-gray-600 hover:bg-gray-50"}`}>
+            {s ? s.replace(/_/g, " ") : "All"}
+          </button>
+        ))}
+        {(dateFrom || dateTo || filter || docTypeFilter) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); setFilter(""); setDocTypeFilter(""); }}
+            className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5 border rounded-lg">Clear</button>
+        )}
+        <span className="text-xs text-gray-400 ml-auto">{proofs.length} proofs</span>
       </div>
-      {loading ? <div className="text-center py-8 text-sm text-gray-500">Loading...</div>
-      : proofs.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No proofs found.</div>
-      : <div className="space-y-2">
-          {proofs.map((p) => {
-            const isOpen = expandedId === p.id;
-            const receipt = receipts[p.id];
-            return (
-              <div key={p.id} className={`rounded-xl border bg-white shadow-sm overflow-hidden ${isOpen ? "ring-1 ring-blue-200" : ""}`}>
-                <button onClick={() => toggleExpand(p.id)} className="w-full flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50 text-left transition-colors">
-                  <div className="shrink-0 text-gray-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">{p.file_name}</div>
-                    <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
-                      <span>{p.created_at ? new Date(p.created_at).toLocaleString() : ""}</span>
-                      {p.processing_method && <span>· {p.processing_method.replace(/_/g, " ")}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                      ["receipt","invoice","payment_proof"].includes(p.document_type)
-                        ? "bg-blue-100 text-blue-800"
-                        : p.document_type && p.document_type !== "unclassified"
-                        ? "bg-gray-100 text-gray-600"
-                        : "bg-gray-50 text-gray-400"
-                    }`}>
-                      {p.document_type ? p.document_type.replace(/_/g, " ") : "unclassified"}
-                    </span>
-                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColors[p.status] || "bg-gray-100 text-gray-600"}`}>
-                      {p.status?.replace(/_/g, " ")}
-                    </span>
-                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${p.erp_status === "synced" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-600"}`}>
-                      {p.erp_status}
-                    </span>
-                  </div>
-                </button>
-                {isOpen && (
-                  <div className="border-t bg-gray-50 px-5 py-4">
-                    {receipt ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Receipt size={14} /> Receipt</h4>
-                          {receipt.status === "review_needed" && editing !== receipt.id && (
-                            <button onClick={() => { setEditing(receipt.id); setForm({
-                              amount: receipt.amount ?? "", currency: receipt.currency ?? "USD",
-                              payer_name: receipt.payer_name ?? "", bank_issuer: receipt.bank_issuer ?? "",
-                              receipt_number: receipt.receipt_number ?? "", payment_date: receipt.payment_date ?? "",
-                              description: receipt.description ?? "",
-                              purchase_currency: receipt.purchase_currency ?? "",
-                              transaction_currency: receipt.transaction_currency ?? "",
-                              card_number: receipt.card_number ?? "", card_type: receipt.card_type ?? "",
-                              payee: receipt.payee ?? "", address: receipt.address ?? "",
-                            }); }} className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-200">
-                              <Edit3 size={12} /> Review & Edit
-                            </button>
-                          )}
-                          {receipt.status === "reviewed" && <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle size={12} /> Reviewed</span>}
-                        </div>
 
-                        {editing === receipt.id ? (
-                          <div className="grid grid-cols-2 gap-3">
-                            {[
-                              { label: "Amount", key: "amount" },
-                              { label: "Currency", key: "currency" },
-                              { label: "Payer Name", key: "payer_name" },
-                              { label: "Bank Issuer", key: "bank_issuer" },
-                              { label: "Receipt #", key: "receipt_number" },
-                              { label: "Payment Date", key: "payment_date" },
-                              { label: "Description", key: "description" },
-                              { label: "Purchase Currency", key: "purchase_currency" },
-                              { label: "Transaction Currency", key: "transaction_currency" },
-                              { label: "Transaction Amount", key: "transaction_amount" },
-                              { label: "Card Number", key: "card_number" },
-                              { label: "Card Type", key: "card_type" },
-                              { label: "Payee", key: "payee" },
-                              { label: "Address", key: "address" },
-                            ].map((f) => (
-                              <div key={f.key}>
-                                <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
-                                <input type="text" value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                                  className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+      {/* Table */}
+      {loading ? <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+      : proofs.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No proofs found.</div>
+      : (
+        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                <th className="px-3 py-2.5 whitespace-nowrap">File Name</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Type</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Method</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Status</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">ERP</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Date</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-10 text-center">Expand</th>
+              </tr>
+            </thead>
+            <tbody>
+              {proofs.map((p) => {
+                const isOpen = expandedId === p.id;
+                const receipt = receipts[p.id];
+                return (
+                  <Fragment key={p.id}>
+                    <tr className={`border-b hover:bg-gray-50 transition-colors cursor-pointer ${isOpen ? "bg-blue-50/30" : ""}`} onClick={() => toggleExpand(p.id)}>
+                      <td className="px-3 py-2.5 font-medium text-gray-800 max-w-[200px] truncate" title={p.file_name}>{p.file_name}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                          ["receipt","invoice","payment_proof"].includes(p.document_type)
+                            ? "bg-blue-50 text-blue-700"
+                            : p.document_type && p.document_type !== "unclassified"
+                            ? "bg-gray-100 text-gray-600"
+                            : "bg-gray-50 text-gray-400"
+                        }`}>
+                          {p.document_type ? p.document_type.replace(/_/g, " ") : "unclassified"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-500">{p.processing_method ? p.processing_method.replace(/_/g, " ") : "—"}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${statusColors[p.status] || "bg-gray-100 text-gray-600"}`}>
+                          {p.status?.replace(/_/g, " ")}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${p.erp_status === "synced" ? "bg-green-50 text-green-700" : "bg-gray-50 text-gray-500"}`}>
+                          {p.erp_status || "—"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-500">{p.created_at ? new Date(p.created_at).toLocaleDateString() : "—"}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-center text-gray-400">
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-gray-50">
+                        <td colSpan={7} className="px-5 py-4 border-b">
+                          {receipt ? (
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <h4 className="text-sm font-semibold text-gray-700 flex items-center gap-1.5"><Receipt size={14} /> Receipt</h4>
+                                {receipt.status === "review_needed" && editing !== receipt.id && (
+                                  <button onClick={(e) => { e.stopPropagation(); setEditing(receipt.id); setForm({
+                                    amount: receipt.amount ?? "", currency: receipt.currency ?? "USD",
+                                    payer_name: receipt.payer_name ?? "", bank_issuer: receipt.bank_issuer ?? "",
+                                    receipt_number: receipt.receipt_number ?? "", payment_date: receipt.payment_date ?? "",
+                                    description: receipt.description ?? "",
+                                    purchase_currency: receipt.purchase_currency ?? "",
+                                    transaction_currency: receipt.transaction_currency ?? "",
+                                    card_number: receipt.card_number ?? "", card_type: receipt.card_type ?? "",
+                                    payee: receipt.payee ?? "", address: receipt.address ?? "",
+                                  }); }} className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 bg-orange-50 px-2.5 py-1 rounded-lg border border-orange-200">
+                                    <Edit3 size={12} /> Review & Edit
+                                  </button>
+                                )}
+                                {receipt.status === "reviewed" && <span className="text-xs text-green-600 font-medium flex items-center gap-1"><CheckCircle size={12} /> Reviewed</span>}
                               </div>
-                            ))}
-                            <div className="col-span-2 flex gap-2 pt-1">
-                              <button onClick={() => setEditing(null)} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>
-                              <button onClick={() => handleSave(receipt.id, p.id)} disabled={saving}
-                                className="flex items-center gap-1 text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                                {saving ? "Saving..." : "Save & Mark Reviewed"}
-                              </button>
+
+                              {editing === receipt.id ? (
+                                <div className="grid grid-cols-2 gap-3" onClick={(e) => e.stopPropagation()}>
+                                  {[
+                                    { label: "Amount", key: "amount" }, { label: "Currency", key: "currency" },
+                                    { label: "Payer Name", key: "payer_name" }, { label: "Bank Issuer", key: "bank_issuer" },
+                                    { label: "Receipt #", key: "receipt_number" }, { label: "Payment Date", key: "payment_date" },
+                                    { label: "Description", key: "description" },
+                                    { label: "Purchase Currency", key: "purchase_currency" },
+                                    { label: "Transaction Currency", key: "transaction_currency" },
+                                    { label: "Transaction Amount", key: "transaction_amount" },
+                                    { label: "Card Number", key: "card_number" }, { label: "Card Type", key: "card_type" },
+                                    { label: "Payee", key: "payee" }, { label: "Address", key: "address" },
+                                  ].map((f) => (
+                                    <div key={f.key}>
+                                      <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
+                                      <input type="text" value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                                        className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 outline-none" />
+                                    </div>
+                                  ))}
+                                  <div className="col-span-2 flex gap-2 pt-1">
+                                    <button onClick={() => setEditing(null)} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>
+                                    <button onClick={() => handleSave(receipt.id, p.id)} disabled={saving}
+                                      className="flex items-center gap-1 text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                                      {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                                      {saving ? "Saving..." : "Save & Mark Reviewed"}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm" onClick={(e) => e.stopPropagation()}>
+                                  {receipt.amount != null && <span className="flex items-center gap-1 font-semibold"><DollarSign size={14} className="text-green-600" /> {Number(receipt.amount).toFixed(2)} {receipt.currency}</span>}
+                                  {receipt.payer_name && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> {receipt.payer_name}</span>}
+                                  {receipt.bank_issuer && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.bank_issuer}</span>}
+                                  {receipt.receipt_number && <span className="flex items-center gap-1 text-gray-600"><Hash size={13} /> {receipt.receipt_number}</span>}
+                                  {receipt.payment_date && <span className="flex items-center gap-1 text-gray-600"><Calendar size={13} /> {receipt.payment_date}</span>}
+                                  {receipt.description && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[200px]"><FileText size={13} /> {receipt.description}</span>}
+                                  {receipt.confidence_score != null && (
+                                    <span className={`flex items-center gap-1 text-xs font-medium ${receipt.confidence_score >= 0.85 ? "text-green-600" : receipt.confidence_score >= 0.5 ? "text-yellow-600" : "text-red-600"}`}>
+                                      <Shield size={12} /> {Math.round(receipt.confidence_score * 100)}%
+                                    </span>
+                                  )}
+                                  {receipt.purchase_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Purchase: {receipt.purchase_currency}</span>}
+                                  {receipt.transaction_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn: {receipt.transaction_currency}</span>}
+                                  {receipt.transaction_amount != null && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn Amt: {Number(receipt.transaction_amount).toFixed(2)}</span>}
+                                  {receipt.card_number && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.card_number}</span>}
+                                  {receipt.card_type && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.card_type}</span>}
+                                  {receipt.payee && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> Payee: {receipt.payee}</span>}
+                                  {receipt.address && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[200px]" title={receipt.address}><FileText size={13} /> {receipt.address}</span>}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        ) : (
-                          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-                            {receipt.amount != null && <span className="flex items-center gap-1 font-semibold"><DollarSign size={14} className="text-green-600" /> {Number(receipt.amount).toFixed(2)} {receipt.currency}</span>}
-                            {receipt.payer_name && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> {receipt.payer_name}</span>}
-                            {receipt.bank_issuer && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.bank_issuer}</span>}
-                            {receipt.receipt_number && <span className="flex items-center gap-1 text-gray-600"><Hash size={13} /> {receipt.receipt_number}</span>}
-                            {receipt.payment_date && <span className="flex items-center gap-1 text-gray-600"><Calendar size={13} /> {receipt.payment_date}</span>}
-                            {receipt.description && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[200px]"><FileText size={13} /> {receipt.description}</span>}
-                            {receipt.purchase_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Purchase: {receipt.purchase_currency}</span>}
-                            {receipt.transaction_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn: {receipt.transaction_currency}</span>}
-                            {receipt.transaction_amount != null && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn Amt: {Number(receipt.transaction_amount).toFixed(2)}</span>}
-                            {receipt.card_number && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.card_number}</span>}
-                            {receipt.card_type && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {receipt.card_type}</span>}
-                            {receipt.payee && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> Payee: {receipt.payee}</span>}
-                            {receipt.address && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[200px]" title={receipt.address}><FileText size={13} /> {receipt.address}</span>}
-                            {receipt.confidence_score != null && (
-                              <span className={`flex items-center gap-1 text-xs font-medium ${receipt.confidence_score >= 0.85 ? "text-green-600" : receipt.confidence_score >= 0.5 ? "text-yellow-600" : "text-red-600"}`}>
-                                <Shield size={12} /> {Math.round(receipt.confidence_score * 100)}%
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-center py-6 text-sm text-gray-400">
-                        <FileText size={24} className="mx-auto mb-2 opacity-50" />
-                        <p>No receipt extracted yet</p>
-                        <p className="text-xs">The PDF may still be processing or extraction failed</p>
-                      </div>
+                          ) : (
+                            <div className="text-center py-6 text-sm text-gray-400" onClick={(e) => e.stopPropagation()}>
+                              <FileText size={24} className="mx-auto mb-2 opacity-50" />
+                              <p>No receipt extracted yet</p>
+                              <p className="text-xs">The PDF may still be processing or extraction failed</p>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
                     )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      }
+      )}
     </div>
   );
 }
 
 /* ========== RECEIPTS TAB ========== */
-function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
+function ReceiptsTab({ initialFilter = "", user }: { initialFilter?: string; user?: any }) {
   const [receipts, setReceipts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(initialFilter);
@@ -559,19 +1400,47 @@ function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [form, setForm] = useState<any>({});
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [auditReceiptId, setAuditReceiptId] = useState<string | null>(null);
+  const [auditRecords, setAuditRecords] = useState<any[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
 
-  useEffect(() => { loadReceipts(); }, [filter]);
+  useEffect(() => { loadReceipts(); }, [filter, dateFrom, dateTo]);
 
   async function loadReceipts() {
     setLoading(true);
     try {
-      const p = new URLSearchParams({ page: "1", page_size: "50" });
+      const p = new URLSearchParams({ page: "1", page_size: "100" });
       if (filter) p.set("status", filter);
+      if (dateFrom) p.set("date_from", dateFrom);
+      if (dateTo) p.set("date_to", dateTo);
       const res = await fetch(`${API}/api/receipts?${p}`);
       const d = await res.json();
       setReceipts(d.items || []);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+    } catch (e) { console.error("loadReceipts error:", e); } finally { setLoading(false); }
   }
+
+  async function loadAudit(receiptId: string) {
+    setAuditLoading(true);
+    setAuditReceiptId(receiptId);
+    try {
+      const res = await fetch(`${API}/api/receipts/${receiptId}/audit`);
+      const d = await res.json();
+      setAuditRecords(d.items || []);
+    } catch (e) { console.error(e); setAuditRecords([]); }
+    finally { setAuditLoading(false); }
+  }
+
+  const FIELD_LABELS_AUDIT: Record<string, string> = {
+    amount: "Amount", currency: "Currency", payer_name: "Payer Name",
+    bank_issuer: "Bank Issuer", receipt_number: "Receipt #", payment_date: "Payment Date",
+    description: "Description", purchase_currency: "Purchase Currency",
+    transaction_currency: "Transaction Currency", transaction_amount: "Transaction Amount",
+    card_number: "Card Number", card_type: "Card Type", payee: "Payee", address: "Address",
+    status: "Status", confidence_score: "Confidence Score",
+  };
 
   function startEdit(r: any) {
     setEditingId(r.id);
@@ -592,7 +1461,7 @@ function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
     try {
       const needsReview = origReceipt.status === "review_needed";
       const payload = needsReview ? { ...form, status: "reviewed" } : form;
-      const updated = await updateReceipt(receiptId, payload);
+      const updated = await updateReceipt(receiptId, payload, user?.id);
       setReceipts(prev => prev.map(r => r.id === receiptId ? updated : r));
       setEditingId(null);
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
@@ -602,6 +1471,12 @@ function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
     Object.values(r).some(v => String(v ?? "").toLowerCase().includes(search.toLowerCase()))
   ) : receipts;
 
+  function confidenceBadge(score: number | null) {
+    if (score == null) return null;
+    const color = score >= 0.85 ? "text-green-700 bg-green-50 border-green-200" : score >= 0.5 ? "text-yellow-700 bg-yellow-50 border-yellow-200" : "text-red-700 bg-red-50 border-red-200";
+    return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${color}`}>{Math.round(score * 100)}%</span>;
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -609,110 +1484,180 @@ function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
         <button onClick={loadReceipts} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" /> Refresh</button>
       </div>
       <div className="mb-4 flex gap-2 flex-wrap items-center">
+        <div className="flex items-center gap-1.5">
+          <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setEditingId(null); }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="From date" />
+          <span className="text-xs text-gray-400">—</span>
+          <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setEditingId(null); }}
+            className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" title="To date" />
+        </div>
         {["", "extracted", "review_needed", "reviewed", "synced", "failed"].map((s) => (
           <button key={s} onClick={() => { setFilter(s); setEditingId(null); }}
             className={`rounded-full px-3 py-1 text-xs ${filter === s ? "bg-blue-600 text-white" : "bg-white border text-gray-600 hover:bg-gray-50"}`}>
             {s ? s.replace(/_/g, " ") : "All"}
           </button>
         ))}
+        {(dateFrom || dateTo || filter) && (
+          <button onClick={() => { setDateFrom(""); setDateTo(""); setFilter(""); }}
+            className="text-xs text-gray-500 hover:text-red-600 px-2 py-1.5 border rounded-lg">Clear</button>
+        )}
         <div className="relative ml-auto">
           <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input type="text" placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)}
             className="rounded-lg border border-gray-300 pl-7 pr-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none w-40" />
         </div>
+        <span className="text-xs text-gray-400">{filtered.length} receipts</span>
       </div>
-      {loading ? <div className="text-center py-8 text-sm text-gray-500">Loading...</div>
-      : filtered.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No receipts found.</div>
-      : <div className="space-y-3">
-          {filtered.map((r) => {
-            const isEditing = editingId === r.id;
-            const needsReview = r.status === "review_needed";
-            return (
-              <div key={r.id} className={`rounded-xl border bg-white p-5 shadow-sm transition-all ${needsReview ? "border-orange-300 ring-1 ring-orange-100" : ""}`}>
-                {isEditing ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-semibold text-gray-700">Edit Receipt</h4>
-                      <div className="flex gap-2">
-                        <button onClick={() => setEditingId(null)} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>
-                        <button onClick={() => handleSave(r.id, r)} disabled={saving}
-                          className="flex items-center gap-1 text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                          {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                          {saving ? "Saving..." : needsReview ? "Save & Mark Reviewed" : "Save"}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {[
-                        { label: "Amount", key: "amount" }, { label: "Currency", key: "currency" },
-                        { label: "Payer Name", key: "payer_name" }, { label: "Bank Issuer", key: "bank_issuer" },
-                        { label: "Receipt #", key: "receipt_number" }, { label: "Payment Date", key: "payment_date" },
-                        { label: "Description", key: "description", span: true },
-                        { label: "Purchase Currency", key: "purchase_currency" },
-                        { label: "Transaction Currency", key: "transaction_currency" },
-                        { label: "Transaction Amount", key: "transaction_amount" },
-                        { label: "Card Number", key: "card_number" }, { label: "Card Type", key: "card_type" },
-                        { label: "Payee", key: "payee" }, { label: "Address", key: "address" },
-                      ].map((f) => (
-                        <div key={f.key} className={f.span ? "col-span-full" : ""}>
-                          <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
-                          <input type="text" value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                            className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none" />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-2 flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {r.receipt_number && <span className="flex items-center gap-1 text-xs font-medium text-gray-700 bg-gray-100 rounded-full px-2 py-0.5"><Hash size={11} /> {r.receipt_number}</span>}
-                        {confidenceBadge(r.confidence_score)}
-                        {r.status === "review_needed" && <span className="inline-flex items-center gap-1 text-xs font-medium text-orange-700 bg-orange-50 rounded-full px-2 py-0.5 border border-orange-200"><AlertTriangle size={11} /> Review Needed</span>}
-                        {r.status === "reviewed" && <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 rounded-full px-2 py-0.5 border border-emerald-200"><CheckCircle size={11} /> Reviewed</span>}
-                        {r.status === "synced" && <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700 bg-green-50 rounded-full px-2 py-0.5"><CheckCircle size={11} /> Synced</span>}
-                        {r.status === "extracted" && <span className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 bg-blue-50 rounded-full px-2 py-0.5"><Shield size={11} /> Extracted</span>}
-                      </div>
-                      <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
-                        {r.amount != null && <span className="flex items-center gap-1 font-semibold text-base"><DollarSign size={15} className="text-green-600" /> {Number(r.amount).toFixed(2)} <span className="font-normal text-gray-500">{r.currency}</span></span>}
-                        {r.payer_name && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> {r.payer_name}</span>}
-                        {r.bank_issuer && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {r.bank_issuer}</span>}
-                        {r.description && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[220px]" title={r.description}><FileText size={13} /> {r.description}</span>}
-                        {r.payment_date && <span className="flex items-center gap-1 text-gray-600"><Calendar size={13} /> {r.payment_date}</span>}
-                        {r.purchase_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Purchase: {r.purchase_currency}</span>}
-                        {r.transaction_currency && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn: {r.transaction_currency}</span>}
-                        {r.transaction_amount != null && <span className="flex items-center gap-1 text-gray-600"><DollarSign size={13} /> Txn Amt: {Number(r.transaction_amount).toFixed(2)}</span>}
-                        {r.card_number && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {r.card_number}</span>}
-                        {r.card_type && <span className="flex items-center gap-1 text-gray-600"><Building2 size={13} /> {r.card_type}</span>}
-                        {r.payee && <span className="flex items-center gap-1 text-gray-600"><User size={13} /> Payee: {r.payee}</span>}
-                        {r.address && <span className="flex items-center gap-1 text-gray-600 truncate max-w-[220px]" title={r.address}><FileText size={13} /> {r.address}</span>}
-                      </div>
-                      {r.payment_proofs && (
-                        <span className="text-xs text-gray-400 flex items-center gap-1">
-                          <ExternalLink size={10} /> Source: {r.payment_proofs.file_name}
-                        </span>
-                      )}
-                      <div className="text-[11px] text-gray-400">{r.created_at ? new Date(r.created_at).toLocaleString() : ""}</div>
-                    </div>
-                    <div className="shrink-0 flex gap-1">
-                      {(needsReview || filter === "review_needed") && (
-                        <button onClick={() => startEdit(r)} className="rounded-lg p-2 bg-orange-50 text-orange-600 hover:bg-orange-100 transition-colors" title="Review & Edit">
-                          <Edit3 size={16} />
-                        </button>
-                      )}
-                      {!needsReview && (
-                        <button onClick={() => startEdit(r)} className="rounded-lg p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit">
-                          <Edit3 size={16} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+
+      {/* Edit form overlay */}
+      {editingId && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30" onClick={() => setEditingId(null)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl p-5 sm:p-6 w-full sm:max-w-lg mx-0 sm:mx-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-700">Edit Receipt</h3>
+              <button onClick={() => setEditingId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "Amount", key: "amount" }, { label: "Currency", key: "currency" },
+                { label: "Payer Name", key: "payer_name" }, { label: "Bank Issuer", key: "bank_issuer" },
+                { label: "Receipt #", key: "receipt_number" }, { label: "Payment Date", key: "payment_date" },
+                { label: "Purchase Currency", key: "purchase_currency" },
+                { label: "Transaction Currency", key: "transaction_currency" },
+                { label: "Transaction Amount", key: "transaction_amount" },
+                { label: "Card Number", key: "card_number" }, { label: "Card Type", key: "card_type" },
+                { label: "Payee", key: "payee" }, { label: "Address", key: "address" },
+              ].map((f) => (
+                <div key={f.key}>
+                  <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
+                  <input type="text" value={form[f.key] ?? ""} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+                    className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 outline-none" />
+                </div>
+              ))}
+            </div>
+            <div className="mt-3">
+              <label className="block text-xs text-gray-500 mb-0.5">Description</label>
+              <textarea value={form.description ?? ""} onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 outline-none w-full" rows={2} />
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setEditingId(null)} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>
+              <button onClick={() => {
+                const r = receipts.find(x => x.id === editingId);
+                if (r) handleSave(editingId, r);
+              }} disabled={saving}
+                className="flex items-center gap-1 text-xs text-white bg-blue-600 px-4 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                {saving ? "Saving..." : "Save Changes"}
+              </button>
+            </div>
+          </div>
         </div>
-      }
+      )}
+
+      {/* Table */}
+      {loading ? <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+      : filtered.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No receipts found.</div>
+      : (
+        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                <th className="px-3 py-2.5 whitespace-nowrap">Receipt #</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Amount</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Payer</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Bank</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Date</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Conf</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Status</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Description</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-24 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r) => (
+                <tr key={r.id} className={`border-b last:border-0 hover:bg-gray-50 transition-colors ${r.status === "review_needed" ? "bg-orange-50/30" : ""}`}>
+                  <td className="px-3 py-2.5 font-medium text-gray-800 whitespace-nowrap">{r.receipt_number || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-gray-800">
+                    {r.amount != null ? `${Number(r.amount).toFixed(2)} ${r.currency || "USD"}` : "—"}
+                  </td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[120px] truncate" title={r.payer_name}>{r.payer_name || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[100px] truncate" title={r.bank_issuer}>{r.bank_issuer || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap text-gray-600">{r.payment_date || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">{confidenceBadge(r.confidence_score) || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <span className={`text-[10px] font-medium uppercase px-1.5 py-0.5 rounded-full whitespace-nowrap ${
+                      r.status === "extracted" ? "bg-blue-50 text-blue-700" :
+                      r.status === "review_needed" ? "bg-orange-50 text-orange-700" :
+                      r.status === "reviewed" ? "bg-emerald-50 text-emerald-700" :
+                      r.status === "synced" ? "bg-green-50 text-green-700" :
+                      r.status === "failed" ? "bg-red-50 text-red-700" : "bg-gray-50 text-gray-600"
+                    }`}>{r.status?.replace(/_/g, " ")}</span>
+                  </td>
+                  <td className="px-3 py-2.5 max-w-[160px] truncate text-gray-500" title={r.description}>{r.description || "—"}</td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <button onClick={() => startEdit(r)} className="text-gray-400 hover:text-blue-600 p-1" title="Select"><Check size={14} /></button>
+                      <button onClick={() => startEdit(r)} className="text-gray-400 hover:text-amber-600 p-1" title="Amend"><Edit3 size={14} /></button>
+                      <button onClick={() => loadAudit(r.id)} className="text-gray-400 hover:text-indigo-600 p-1" title="Audit Trail"><History size={14} /></button>
+                      {confirmDelete === r.id ? (
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => {
+                            updateReceipt(r.id, { status: "failed" }, user?.id).then(() => { setConfirmDelete(null); loadReceipts(); });
+                          }} className="text-red-600 hover:text-red-800 p-1" title="Confirm"><Check size={14} /></button>
+                          <button onClick={() => setConfirmDelete(null)} className="text-gray-400 hover:text-gray-600 p-1" title="Cancel"><X size={14} /></button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setConfirmDelete(r.id)} className="text-gray-400 hover:text-red-600 p-1" title="Delete"><Trash2 size={14} /></button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Audit trail modal */}
+      {auditReceiptId && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30" onClick={() => setAuditReceiptId(null)}>
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl p-5 sm:p-6 w-full sm:max-w-lg mx-0 sm:mx-4 max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><History size={16} className="text-indigo-500" /> Audit Trail</h3>
+              <button onClick={() => setAuditReceiptId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+            </div>
+            {auditLoading ? (
+              <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+            ) : auditRecords.length === 0 ? (
+              <div className="text-center py-8 text-sm text-gray-400">No changes recorded yet.</div>
+            ) : (
+              <div className="space-y-3">
+                {auditRecords.map((a: any) => (
+                  <div key={a.id} className="rounded-lg border bg-gray-50 p-3 text-xs">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-semibold text-gray-700">{FIELD_LABELS_AUDIT[a.field_name] || a.field_name}</span>
+                      <span className="text-[10px] text-gray-400">
+                        {new Date(a.changed_at).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-[10px] text-gray-400 mb-0.5">Old value</div>
+                        <div className="bg-red-50 text-red-700 rounded px-2 py-1 break-all line-through">{a.old_value || <span className="text-gray-300 italic">empty</span>}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-gray-400 mb-0.5">New value</div>
+                        <div className="bg-green-50 text-green-700 rounded px-2 py-1 break-all">{a.new_value || <span className="text-gray-300 italic">empty</span>}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -744,9 +1689,9 @@ function ReconciliationTab() {
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [allEntries, setAllEntries] = useState<any[]>([]);
-  const [showEntries, setShowEntries] = useState(false);
-  const [entryForm, setEntryForm] = useState<any>({});
-  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<any>(null);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => { loadData(); }, [classFilter]);
 
@@ -771,23 +1716,43 @@ function ReconciliationTab() {
       setEntriesById(eMap);
 
       const proofIds = Array.from(new Set((resultsRes.items || []).map((r: any) => r.proof_receipt_id).filter(Boolean)));
+      const pMap: Record<string, any> = {};
       if (proofIds.length > 0) {
-        const pMap: Record<string, any> = {};
-        const p = new URLSearchParams({ page: "1", page_size: "200" });
+        const p = new URLSearchParams({ page: "1", page_size: "100" });
         const pr = await fetch(`${API}/api/receipts?${p}`);
-        const pd = await pr.json();
-        (pd.items || []).forEach((r: any) => { pMap[r.id] = r; });
-        setProofsById(pMap);
+        if (pr.ok) {
+          const pd = await pr.json();
+          (pd.items || []).forEach((r: any) => { pMap[r.id] = r; });
+        }
       }
+      setProofsById(pMap);
     } catch (e) { console.error(e); } finally { setLoading(false); }
   }
 
   async function handleRun() {
     setRunning(true);
+    setProgress({ total: 0, processed: 0, current_label: "Starting..." });
     try {
-      await runReconciliation();
-      await loadData();
-    } catch (e: any) { alert(e.message); } finally { setRunning(false); }
+      await runReconciliation(dateFrom || undefined, dateTo || undefined);
+      const poll = setInterval(async () => {
+        try {
+          const p = await fetchReconciliationProgress();
+          setProgress(p);
+          if (p.status === "complete" || p.status === "failed") {
+            clearInterval(poll);
+            if (p.status === "complete") {
+              await loadData();
+            }
+            setRunning(false);
+            setTimeout(() => setProgress(null), 2000);
+          }
+        } catch { clearInterval(poll); setRunning(false); setProgress(null); }
+      }, 400);
+    } catch (e: any) {
+      alert(e.message);
+      setRunning(false);
+      setProgress(null);
+    }
   }
 
   async function handleOverride(resultId: string, classification: string) {
@@ -809,79 +1774,27 @@ function ReconciliationTab() {
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
-  function resetEntryForm() {
-    setEntryForm({ amount: "", currency: "USD", payer_name: "", payment_date: "", receipt_number: "", description: "", vendor: "", cost_center: "", account_code: "", notes: "" });
-    setEditingEntryId(null);
-  }
-
-  async function handleSaveEntry() {
-    setSaving(true);
-    try {
-      const payload = { ...entryForm, amount: parseFloat(entryForm.amount) || 0 };
-      if (editingEntryId) {
-        await updateAccountingEntry(editingEntryId, payload);
-      } else {
-        await createAccountingEntry(payload);
-      }
-      resetEntryForm();
-      await loadData();
-    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
-  }
-
-  async function handleDeleteEntry(id: string) {
-    if (!confirm("Delete this accounting entry?")) return;
-    try {
-      await deleteAccountingEntry(id);
-      await loadData();
-    } catch (e: any) { alert(e.message); }
-  }
-
-  function startEditEntry(e: any) {
-    setEntryForm({
-      amount: e.amount ?? "",
-      currency: e.currency ?? "USD",
-      payer_name: e.payer_name ?? "",
-      payment_date: e.payment_date ?? "",
-      receipt_number: e.receipt_number ?? "",
-      description: e.description ?? "",
-      vendor: e.vendor ?? "",
-      cost_center: e.cost_center ?? "",
-      account_code: e.account_code ?? "",
-      notes: e.notes ?? "",
-    });
-    setEditingEntryId(e.id);
-    setShowEntries(true);
-  }
-
   function classBadge(c: string) {
     const label = c.replace(/_/g, " ");
     const color = CLASS_COLORS[c] || CLASS_COLORS.pending;
-    return <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border ${color}`}>{label}</span>;
+    return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border ${color}`}>{label}</span>;
   }
 
   const CLASS_FILTERS = ["", "correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"];
-  const ENTRY_FIELDS = [
-    { label: "Receipt #", key: "receipt_number" },
-    { label: "Amount *", key: "amount", type: "number" },
-    { label: "Currency", key: "currency" },
-    { label: "Payer Name", key: "payer_name" },
-    { label: "Payment Date", key: "payment_date", type: "date" },
-    { label: "Description", key: "description" },
-    { label: "Vendor", key: "vendor" },
-    { label: "Cost Center", key: "cost_center" },
-    { label: "Account Code", key: "account_code" },
-    { label: "Notes", key: "notes" },
-  ];
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h2 className="text-xl font-bold">Reconciliation</h2>
-        <div className="flex items-center gap-2">
-          <button onClick={() => { resetEntryForm(); setShowEntries(!showEntries); }}
-            className="text-sm text-gray-600 border rounded-lg px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1">
-            <Building2 size={14} /> {showEntries ? "Hide Entries" : "Manage Entries"}
-          </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span>From</span>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" />
+            <span>To</span>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-blue-500 outline-none" />
+          </div>
           <button onClick={loadData} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" /> Refresh</button>
           <button onClick={handleRun} disabled={running}
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
@@ -891,60 +1804,29 @@ function ReconciliationTab() {
         </div>
       </div>
 
-      <div className="grid gap-3 mb-5 sm:grid-cols-6">
-        {[
-          { label: "Total", key: "total", color: "bg-gray-50 text-gray-700" },
-          { label: "Correct", key: "correct", color: "bg-green-50 text-green-700" },
-          { label: "Minor", key: "minor_mistake", color: "bg-yellow-50 text-yellow-700" },
-          { label: "Potential Fraud", key: "potential_fraud", color: "bg-orange-50 text-orange-700" },
-          { label: "Forensic", key: "forensic_required", color: "bg-red-50 text-red-700" },
-          { label: "Fraud", key: "fraud_detected", color: "bg-red-100 text-red-800" },
-        ].map((s) => (
-          <div key={s.key} className={`rounded-lg border p-3 ${s.color}`}>
-            <div className="text-xs opacity-70">{s.label}</div>
-            <div className="text-xl font-bold">{stats[s.key] ?? 0}</div>
-          </div>
-        ))}
-      </div>
-
-      {showEntries && (
-        <div className="rounded-xl border bg-white p-5 shadow-sm mb-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-4">{editingEntryId ? "Edit Accounting Entry" : "New Accounting Entry"}</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-4">
-            {ENTRY_FIELDS.map((f) => (
-              <div key={f.key}>
-                <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
-                <input type={f.type || "text"} value={entryForm[f.key] ?? ""} onChange={(e) => setEntryForm({ ...entryForm, [f.key]: e.target.value })}
-                  className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleSaveEntry} disabled={saving || !entryForm.amount}
-              className="flex items-center gap-1 text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              {editingEntryId ? "Update" : "Add Entry"}
-            </button>
-            {editingEntryId && <button onClick={resetEntryForm} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>}
-          </div>
-
-          {allEntries.length > 0 && (
-            <div className="mt-5 space-y-1.5 max-h-60 overflow-y-auto">
-              {allEntries.map((e) => (
-                <div key={e.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs ${editingEntryId === e.id ? "bg-blue-50" : "bg-gray-50 hover:bg-gray-100"}`}>
-                  <span className="font-medium w-24 truncate">{e.receipt_number || "—"}</span>
-                  <span className="w-20">{e.amount != null ? `${Number(e.amount).toFixed(2)} ${e.currency || ""}` : "—"}</span>
-                  <span className="flex-1 truncate">{e.payer_name || e.vendor || "—"}</span>
-                  <span className="w-16 text-gray-400">{e.status}</span>
-                  <button onClick={() => startEditEntry(e)} className="text-blue-600 hover:text-blue-800"><Edit3 size={12} /></button>
-                  <button onClick={() => handleDeleteEntry(e.id)} className="text-red-500 hover:text-red-700"><X size={12} /></button>
-                </div>
-              ))}
+      {/* Progress bar */}
+      {progress && progress.status !== "complete" && (
+        <div className="mb-4 rounded-xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-sm">
+              <Loader2 size={14} className="animate-spin text-blue-600" />
+              <span className="font-medium text-gray-700">
+                {progress.total > 0 ? `Processing ${progress.processed} of ${progress.total}` : "Processing..."}
+              </span>
             </div>
-          )}
+            <span className="text-xs text-gray-400">
+              {progress.total > 0 ? `${Math.round((progress.processed / progress.total) * 100)}%` : ""}
+            </span>
+          </div>
+          <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: progress.total > 0 ? `${(progress.processed / progress.total) * 100}%` : "5%" }} />
+          </div>
+          {progress.current_label && <p className="text-xs text-gray-400 mt-1.5">{progress.current_label}</p>}
         </div>
       )}
 
+      {/* Classification filters */}
       <div className="mb-4 flex gap-2 flex-wrap items-center">
         {CLASS_FILTERS.map((c) => (
           <button key={c} onClick={() => setClassFilter(c)}
@@ -952,174 +1834,267 @@ function ReconciliationTab() {
             {c ? c.replace(/_/g, " ") : "All"}
           </button>
         ))}
+        <span className="text-xs text-gray-400 ml-auto">{results.length} results</span>
       </div>
 
-      {loading ? <div className="text-center py-8 text-sm text-gray-500">Loading...</div>
-      : results.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No results. Add accounting entries and run reconciliation.</div>
-      : <div className="space-y-2">
-          {results.map((r) => {
-            const isOpen = expandedId === r.id;
-            const proof = r.proof_receipt_id ? proofsById[r.proof_receipt_id] : null;
-            const entry = r.accounting_entry_id ? entriesById[r.accounting_entry_id] : null;
-            const isUnmatched = r.match_type === "unmatched_proof" || r.match_type === "unmatched_entry";
-            return (
-              <div key={r.id} className={`rounded-xl border bg-white shadow-sm overflow-hidden ${CLASS_COLORS[r.classification]?.replace("bg-", "ring-1 ring-").replace("border-", "").replace("100", "200").replace("200", "300") || ""}`}>
-                <button onClick={() => setExpandedId(isOpen ? null : r.id)}
-                  className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50 text-left transition-colors">
-                  <div className="shrink-0 text-gray-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</div>
-                  <div className="flex-1 min-w-0 grid grid-cols-5 gap-3 text-sm">
-                    {isUnmatched ? (
-                      <>
-                        <span className="text-xs text-gray-400 col-span-2">{r.match_type === "unmatched_proof" ? "Proof has no accounting match" : "Accounting entry has no proof"}</span>
-                        <span className="text-xs text-gray-400">{r.match_type.replace(/_/g, " ")}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="truncate font-medium">{proof?.receipt_number || proof?.payer_name || "Proof"}</span>
-                        <span className="truncate">{proof?.amount != null ? `${Number(proof.amount).toFixed(2)} ${proof.currency || ""}` : "—"}</span>
-                        <span className="truncate">{entry?.receipt_number || entry?.vendor || "Entry"}</span>
-                        <span className="truncate">{entry?.amount != null ? `${Number(entry.amount).toFixed(2)} ${entry.currency || ""}` : "—"}</span>
-                        <span className="truncate">{r.amount_diff != null ? `${r.amount_diff >= 0 ? "+" : ""}${Number(r.amount_diff).toFixed(2)}` : "—"}</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="shrink-0 flex items-center gap-2">
-                    {r.matching_score != null && r.matching_score > 0 && (
-                      <span className="text-xs text-gray-400">{(r.matching_score * 100).toFixed(0)}%</span>
-                    )}
-                    {classBadge(r.classification)}
-                  </div>
-                </button>
-                {isOpen && (
-                  <div className="border-t bg-gray-50 px-5 py-4 space-y-4">
-                    {isUnmatched ? (
-                      <div className="space-y-3">
-                        <p className="text-sm text-gray-600">{r.match_type === "unmatched_proof" ? "This receipt has no matching entry in the accounting system." : "This accounting entry has no supporting proof document."}</p>
-                        {r.match_type === "unmatched_proof" ? (
-                          <div className="flex items-center gap-3">
-                            <select id={`match-entry-${r.id}`} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs bg-white flex-1"
-                              defaultValue="">
-                              <option value="" disabled>Select accounting entry to link...</option>
-                              {allEntries.filter((e) => e.status === "posted").map((e) => (
-                                <option key={e.id} value={e.id}>{e.receipt_number || e.vendor || e.id.slice(0, 8)} — {e.amount} {e.currency}</option>
-                              ))}
-                            </select>
-                            <button onClick={() => {
-                              const sel = document.getElementById(`match-entry-${r.id}`) as HTMLSelectElement;
-                              if (sel?.value) handleManualMatch(r.id, r.proof_receipt_id, sel.value);
-                            }} disabled={saving}
-                              className="text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
-                              {saving ? <Loader2 size={12} className="animate-spin" /> : "Link & Mark Reviewed"}
-                            </button>
-                          </div>
+      {/* Table */}
+      {loading ? <div className="text-center py-8 text-sm text-gray-500"><Loader2 size={16} className="animate-spin inline mr-2" />Loading...</div>
+      : results.length === 0 ? (
+        <div className="rounded-xl border-2 border-dashed border-blue-200 bg-blue-50 p-8 text-center">
+          <Scale size={32} className="mx-auto text-blue-300 mb-3" />
+          <h3 className="text-lg font-semibold text-blue-800 mb-1">No reconciliation results yet</h3>
+          <p className="text-sm text-blue-600 mb-4">Upload proofs and add accounting entries, then run reconciliation to cross-reference them.</p>
+          <div className="flex items-center justify-center gap-2 text-xs text-blue-500">
+            <span className="inline-flex items-center gap-1"><FileText size={12} /> {stats.total ?? 0} existing results</span>
+            <span className="text-blue-300">|</span>
+            <span className="inline-flex items-center gap-1"><Calendar size={12} /> Set date range above and run</span>
+          </div>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border bg-white shadow-sm">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                <th className="px-3 py-2.5 whitespace-nowrap">Receipt #</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Proof Amount</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Payer</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Entry</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Entry Amount</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Diff</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Type</th>
+                <th className="px-3 py-2.5 whitespace-nowrap">Classification</th>
+                <th className="px-3 py-2.5 whitespace-nowrap w-10 text-center">Expand</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r) => {
+                const isOpen = expandedId === r.id;
+                const proof = r.proof_receipt_id ? proofsById[r.proof_receipt_id] : null;
+                const entry = r.accounting_entry_id ? entriesById[r.accounting_entry_id] : null;
+                const isUnmatched = r.match_type === "unmatched_proof" || r.match_type === "unmatched_entry";
+                return (
+                  <Fragment key={r.id}>
+                    <tr className={`border-b hover:bg-gray-50 transition-colors cursor-pointer ${isOpen ? "bg-blue-50/30" : ""}`}
+                      onClick={() => setExpandedId(isOpen ? null : r.id)}>
+                      <td className="px-3 py-2.5 font-medium text-gray-800 whitespace-nowrap">
+                        {isUnmatched && r.match_type === "unmatched_entry" ? (
+                          <span className="text-gray-400">—</span>
                         ) : (
-                          <p className="text-xs text-gray-400">No action needed — the proof document for this entry was not uploaded.</p>
+                          proof?.receipt_number || <span className="text-gray-400">—</span>
                         )}
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {proof?.proof_id && (
-                          <div className="flex items-center gap-2 text-xs text-gray-500">
-                            <ExternalLink size={12} />
-                            <span>Source proof: <span className="font-medium text-gray-700">{proof.proof_id}</span></span>
-                          </div>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-gray-800">
+                        {isUnmatched && r.match_type === "unmatched_entry" ? (
+                          <span className="text-gray-300">—</span>
+                        ) : (
+                          proof?.amount != null ? `${Number(proof.amount).toFixed(2)}` : <span className="text-gray-400">—</span>
                         )}
-                        {r._aa?.summary && (
-                          <div className={`rounded-lg border p-3 text-sm ${
-                            r._aa.risk_level === "high" ? "bg-red-50 border-red-200" :
-                            r._aa.risk_level === "medium" ? "bg-orange-50 border-orange-200" :
-                            "bg-blue-50 border-blue-200"
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[120px] truncate" title={proof?.payer_name}>
+                        {isUnmatched && r.match_type === "unmatched_entry" ? (
+                          <span className="text-gray-400">—</span>
+                        ) : (
+                          proof?.payer_name || <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-gray-600 max-w-[120px] truncate" title={entry?.vendor || entry?.payer_name}>
+                        {entry?.vendor || entry?.payer_name || <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap font-semibold text-gray-800">
+                        {entry?.amount != null ? `${Number(entry.amount).toFixed(2)}` : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {!isUnmatched && r.amount_diff != null ? (
+                          <span className={`font-semibold ${Math.abs(r.amount_diff) > 0.5 ? "text-red-600" : "text-green-600"}`}>
+                            {r.amount_diff >= 0 ? "+" : ""}{Number(r.amount_diff).toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">
+                        {isUnmatched ? (
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                            r.match_type === "unmatched_proof" ? "bg-blue-50 text-blue-700" : "bg-orange-50 text-orange-700"
                           }`}>
-                            <div className="flex items-center justify-between mb-1">
-                              <span className="text-xs font-semibold text-gray-600">AI Analysis</span>
-                              <span className={`text-xs font-medium ${
-                                r._aa.risk_level === "high" ? "text-red-600" :
-                                r._aa.risk_level === "medium" ? "text-orange-600" : "text-blue-600"
-                              }`}>Risk: {r._aa.risk_level}</span>
-                            </div>
-                            <p className="text-xs text-gray-700">{r._aa.summary}</p>
-                            {r._aa.details && r._aa.details.length > 0 && (
-                              <ul className="mt-1.5 space-y-0.5">
-                                {r._aa.details.map((d: string, i: number) => (
-                                  <li key={i} className="text-xs text-gray-600 flex items-start gap-1">
-                                    <span className="mt-0.5">•</span> {d}
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
+                            {r.match_type === "unmatched_proof" ? "Unmatched Proof" : "Unmatched Entry"}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-green-50 text-green-700">Matched</span>
                         )}
-                        <div className="grid grid-cols-2 gap-6">
-                          <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Receipt size={14} /> Extracted from PDF</h4>
-                            <div className="space-y-2 text-sm">
-                              {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
-                                const pv = proof?.[f];
-                                const ev = entry?.[f];
-                                const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
-                                return (
-                                  <div key={f} className="flex items-center justify-between">
-                                    <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
-                                    <span className={`font-mono text-xs ${!pv ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
-                                      {f === "amount" && pv != null ? `${Number(pv).toFixed(2)}` : String(pv ?? "—")}
-                                    </span>
+                      </td>
+                      <td className="px-3 py-2.5 whitespace-nowrap">{classBadge(r.classification)}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-center text-gray-400">
+                        {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-gray-50">
+                        <td colSpan={9} className="px-5 py-4 border-b space-y-4">
+                          {isUnmatched ? (
+                            <div className="space-y-3">
+                              {r.match_type === "unmatched_proof" ? (
+                                <>
+                                  <p className="text-sm text-gray-600">This receipt has no matching entry in the accounting system.</p>
+                                  <div className="flex items-center gap-3">
+                                    <select id={`match-entry-${r.id}`} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs bg-white flex-1"
+                                      defaultValue="">
+                                      <option value="" disabled>Select accounting entry to link...</option>
+                                      {allEntries.filter((e) => e.status === "posted").map((e) => (
+                                        <option key={e.id} value={e.id}>{e.receipt_number || e.vendor || e.id.slice(0, 8)} — {e.amount} {e.currency}</option>
+                                      ))}
+                                    </select>
+                                    <button onClick={() => {
+                                      const sel = document.getElementById(`match-entry-${r.id}`) as HTMLSelectElement;
+                                      if (sel?.value) handleManualMatch(r.id, r.proof_receipt_id, sel.value);
+                                    }} disabled={saving}
+                                      className="text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                                      {saving ? <Loader2 size={12} className="animate-spin" /> : "Link & Mark Reviewed"}
+                                    </button>
                                   </div>
-                                );
-                              })}
-                              {r.matched_fields && typeof r.matched_fields === "object" && (
-                                <div className="flex items-center gap-2 pt-1 text-xs">
-                                  {Object.entries(r.matched_fields).map(([k, v]) => (
-                                    <span key={k} className={`rounded-full px-2 py-0.5 ${v ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                                      {k.replace(/_/g, " ")} {v ? "✓" : "✗"}
-                                    </span>
-                                  ))}
+                                </>
+                              ) : (
+                                <div className="space-y-3">
+                                  <div className="flex items-start gap-3 p-3 rounded-lg border border-orange-200 bg-orange-50">
+                                    <div className="shrink-0 w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center">
+                                      <AlertTriangle size={16} className="text-orange-600" />
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-medium text-orange-800">No proof document loaded for this entry</p>
+                                      <p className="text-xs text-orange-600 mt-0.5">The accounting entry exists but no receipt has been uploaded for verification.</p>
+                                    </div>
+                                  </div>
+                                  {entry && (
+                                    <div className="rounded-lg border bg-white p-3">
+                                      <h4 className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wider">Entry Details</h4>
+                                      <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                                        {["vendor", "receipt_number", "amount", "currency", "payment_date", "description", "account_code", "cost_center"].filter(f => entry[f]).map(f => (
+                                          <div key={f} className="flex items-center gap-2">
+                                            <span className="text-gray-400 text-xs w-28 capitalize">{f.replace(/_/g, " ")}</span>
+                                            <span className="font-mono text-xs text-gray-800">{String(entry[f])}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
-                          </div>
-                          <div>
-                            <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Building2 size={14} /> Accounting System</h4>
-                            <div className="space-y-2 text-sm">
-                              {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
-                                const ev = entry?.[f];
-                                const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
-                                return (
-                                  <div key={f} className="flex items-center justify-between">
-                                    <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
-                                    <span className={`font-mono text-xs ${!ev ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
-                                      {f === "amount" && ev != null ? `${Number(ev).toFixed(2)}` : String(ev ?? "—")}
-                                    </span>
+                          ) : (
+                            <div className="space-y-4">
+                              {proof && (
+                                <div className="flex items-center gap-3 text-xs text-gray-500 border-b pb-3">
+                                  <div className="flex items-center gap-1.5">
+                                    <ExternalLink size={12} />
+                                    <span>Receipt: <span className="font-medium text-gray-700">{proof.id.slice(0, 8)}</span></span>
                                   </div>
-                                );
-                              })}
+                                  <div className="flex items-center gap-1.5">
+                                    <FileText size={12} />
+                                    <span>Proof: <span className="font-medium text-gray-700">{proof.payment_proofs?.file_name || proof.proof_id || "—"}</span></span>
+                                  </div>
+                                  {entry && (
+                                    <div className="flex items-center gap-1.5">
+                                      <Building2 size={12} />
+                                      <span>Accounting: <span className="font-medium text-gray-700">{entry.id.slice(0, 8)}</span></span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {r._aa?.summary && (
+                                <div className={`rounded-lg border p-3 text-sm ${
+                                  r._aa.risk_level === "high" ? "bg-red-50 border-red-200" :
+                                  r._aa.risk_level === "medium" ? "bg-orange-50 border-orange-200" : "bg-blue-50 border-blue-200"
+                                }`}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-semibold text-gray-600">AI Analysis</span>
+                                    <span className={`text-xs font-medium ${
+                                      r._aa.risk_level === "high" ? "text-red-600" :
+                                      r._aa.risk_level === "medium" ? "text-orange-600" : "text-blue-600"
+                                    }`}>Risk: {r._aa.risk_level}</span>
+                                  </div>
+                                  <p className="text-xs text-gray-700">{r._aa.summary}</p>
+                                  {r._aa.details && r._aa.details.length > 0 && (
+                                    <ul className="mt-1.5 space-y-0.5">
+                                      {r._aa.details.map((d: string, i: number) => (
+                                        <li key={i} className="text-xs text-gray-600 flex items-start gap-1"><span className="mt-0.5">•</span> {d}</li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
+                              <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                  <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Receipt size={14} /> Extracted from PDF</h4>
+                                  <div className="space-y-2 text-sm">
+                                    {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                                      const pv = proof?.[f];
+                                      const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                                      return (
+                                        <div key={f} className="flex items-center justify-between">
+                                          <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                          <span className={`font-mono text-xs ${!pv ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                            {f === "amount" && pv != null ? `${Number(pv).toFixed(2)}` : String(pv ?? "—")}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                    {r.matched_fields && typeof r.matched_fields === "object" && (
+                                      <div className="flex items-center gap-2 pt-1 text-xs">
+                                        {Object.entries(r.matched_fields).map(([k, v]) => (
+                                          <span key={k} className={`rounded-full px-2 py-0.5 ${v ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                                            {k.replace(/_/g, " ")} {v ? "✓" : "✗"}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div>
+                                  <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Building2 size={14} /> Accounting System</h4>
+                                  <div className="space-y-2 text-sm">
+                                    {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                                      const ev = entry?.[f];
+                                      const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                                      return (
+                                        <div key={f} className="flex items-center justify-between">
+                                          <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                          <span className={`font-mono text-xs ${!ev ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                            {f === "amount" && ev != null ? `${Number(ev).toFixed(2)}` : String(ev ?? "—")}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                          )}
 
-                    <div className="pt-2 border-t flex items-end gap-3">
-                      <div className="flex-1">
-                        <label className="block text-xs text-gray-500 mb-1">Notes</label>
-                        <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
-                          placeholder="Add note..." className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
-                      </div>
-                      <select defaultValue="" onChange={(e) => { if (e.target.value) handleOverride(r.id, e.target.value); }}
-                        className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs bg-white">
-                        <option value="" disabled>Override classification...</option>
-                        {["correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"].map((c) => (
-                          <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
-                        ))}
-                      </select>
-                      {r.human_reviewed && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Reviewed</span>}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                          <div className="pt-2 border-t flex items-end gap-3">
+                            <div className="flex-1">
+                              <label className="block text-xs text-gray-500 mb-1">Notes</label>
+                              <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+                                placeholder="Add note..." className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+                            </div>
+                            <select defaultValue="" onChange={(e) => { if (e.target.value) handleOverride(r.id, e.target.value); }}
+                              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs bg-white">
+                              <option value="" disabled>Override classification...</option>
+                              {["correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"].map((c) => (
+                                <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
+                              ))}
+                            </select>
+                            {r.human_reviewed && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Reviewed</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      }
+      )}
     </div>
   );
 }

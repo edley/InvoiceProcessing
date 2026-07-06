@@ -7,6 +7,7 @@ from app.supabase_client import supabase
 from app.config import settings
 from app.services.llm_extractor import extract_with_llm, llm_fallback_extract
 from app.services.document_classifier import classify_document, is_receipt_type
+from app.settings_db import get_all_settings
 from datetime import datetime
 
 
@@ -165,7 +166,11 @@ def process_proof(proof_id: str) -> dict:
 
         llm_result = None
         llm_raw_response = None
-        has_llm = bool(settings.openai_api_key) if settings.llm_provider == "openai" else bool(settings.nvidia_api_key)
+        db_settings = get_all_settings()
+        db_provider = db_settings.get("llm_provider") or settings.llm_provider
+        db_openai = db_settings.get("openai_api_key") or settings.openai_api_key
+        db_nvidia = db_settings.get("nvidia_api_key") or settings.nvidia_api_key
+        has_llm = bool(db_openai) if db_provider == "openai" else bool(db_nvidia)
         if has_llm:
             llm_result, llm_raw_response = extract_with_llm(text)
             _log(proof_id, "llm_primary", "success" if llm_result else "failure",

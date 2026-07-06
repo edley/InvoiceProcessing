@@ -66,7 +66,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 text-white mb-4">
             <Shield size={24} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">tolmaiERP</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Automated Invoice Process <span className="text-blue-600">(AI-Tolmai)</span></h1>
           <p className="text-sm text-gray-500 mt-1">Payment Proof Processor</p>
         </div>
 

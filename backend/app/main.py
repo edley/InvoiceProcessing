@@ -55,7 +55,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation
+from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation, settings
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(proofs.router, prefix="/api", tags=["proofs"])
@@ -64,12 +64,13 @@ app.include_router(receipts.router, prefix="/api", tags=["receipts"])
 app.include_router(whatsapp.router, prefix="/api", tags=["whatsapp"])
 app.include_router(accounting.router, prefix="/api", tags=["accounting"])
 app.include_router(reconciliation.router, prefix="/api", tags=["reconciliation"])
+app.include_router(settings.router, prefix="/api", tags=["settings"])
 
 
 @app.get("/api/whatsapp/test")
 def test_whatsapp():
     from app.services.whatsapp_client import whatsapp_client
-    result = whatsapp_client.send_message("31611000862", "Test from tolmaierp backend")
+    result = whatsapp_client.send_message("31611000862", "Test from AI-Tolmai backend")
     return result
 
 

@@ -1,6 +1,8 @@
 import json
+import httpx
 from openai import OpenAI
 from app.config import settings
+from app.settings_db import get_all_settings
 
 CLASSIFIER_PROMPT = """You are a document classifier. Given raw OCR text from a document, classify what type of document it is.
 
@@ -29,27 +31,37 @@ Rules:
 - Return ONLY valid JSON, no markdown, no explanation"""
 
 
-def _get_client():
-    if settings.llm_provider == "nvidia":
-        return OpenAI(
-            api_key=settings.nvidia_api_key,
-            base_url=settings.nvidia_base_url,
-        )
-    return OpenAI(api_key=settings.openai_api_key)
+def _get_config():
+    db = get_all_settings()
+    provider = db.get("llm_provider") or settings.llm_provider
+    model = db.get("llm_model") or settings.llm_model
+    if provider == "nvidia":
+        return {
+            "provider": "nvidia",
+            "api_key": db.get("nvidia_api_key") or settings.nvidia_api_key,
+            "base_url": db.get("nvidia_base_url") or settings.nvidia_base_url,
+            "model": db.get("nvidia_model") or settings.nvidia_model,
+        }
+    return {
+        "provider": "openai",
+        "api_key": db.get("openai_api_key") or settings.openai_api_key,
+        "model": model,
+    }
 
 
-def _get_model():
-    if settings.llm_provider == "nvidia":
-        return settings.nvidia_model
-    return settings.llm_model
+def _get_client(cfg: dict):
+    http_client = httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0))
+    if cfg["provider"] == "nvidia":
+        return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], http_client=http_client)
+    return OpenAI(api_key=cfg["api_key"], http_client=http_client)
 
 
 def classify_document(text: str) -> dict:
     try:
-        client = _get_client()
-        model = _get_model()
+        cfg = _get_config()
+        client = _get_client(cfg)
         response = client.chat.completions.create(
-            model=model,
+            model=cfg["model"],
             messages=[
                 {"role": "system", "content": CLASSIFIER_PROMPT},
                 {"role": "user", "content": f"Classify this document text:\n\n{text[:2000]}"},

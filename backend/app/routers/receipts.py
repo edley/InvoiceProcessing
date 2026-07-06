@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from app.supabase_client import supabase
+from datetime import datetime, timezone
 
 router = APIRouter()
 
@@ -22,6 +23,7 @@ class ReceiptUpdate(BaseModel):
     payee: Optional[str] = None
     address: Optional[str] = None
     status: Optional[str] = None
+    changed_by: Optional[str] = None
 
 
 @router.get("/receipts")
@@ -64,16 +66,44 @@ def update_receipt(receipt_id: str, body: ReceiptUpdate):
     if not existing.data:
         raise HTTPException(status_code=404, detail="Receipt not found")
 
-    update_data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    old = existing.data[0]
+    update_data = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None and k != "changed_by"}
     if update_data:
         supabase.table("proof_of_payment_receipt").update(update_data).eq("id", receipt_id).execute()
+
+        # Log field-level audit trail
+        changed_by = body.changed_by
+        audit_records = []
+        for field, new_val in update_data.items():
+            old_val = old.get(field)
+            if str(old_val) != str(new_val):
+                audit_records.append({
+                    "receipt_id": receipt_id,
+                    "field_name": field,
+                    "old_value": str(old_val) if old_val is not None else None,
+                    "new_value": str(new_val) if new_val is not None else None,
+                    "changed_by": changed_by,
+                    "changed_at": datetime.now(timezone.utc).isoformat(),
+                })
+        if audit_records:
+            supabase.table("receipt_field_audit").insert(audit_records).execute()
 
         # When receipt is reviewed, also update proof status to ready_to_process
         new_status = update_data.get("status")
         if new_status == "reviewed":
             supabase.table("payment_proofs").update({
                 "status": "ready_to_process",
-            }).eq("id", existing.data[0]["proof_id"]).execute()
+            }).eq("id", old["proof_id"]).execute()
 
     result = supabase.table("proof_of_payment_receipt").select("*, payment_proofs(file_name, status, file_path)").eq("id", receipt_id).execute()
     return result.data[0]
+
+
+@router.get("/receipts/{receipt_id}/audit")
+def get_receipt_audit(receipt_id: str):
+    result = supabase.table("receipt_field_audit") \
+        .select("*") \
+        .eq("receipt_id", receipt_id) \
+        .order("changed_at", desc=True) \
+        .execute()
+    return {"items": result.data}

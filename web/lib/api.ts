@@ -47,11 +47,12 @@ export async function syncProofToErp(proofId: string) {
   return res.json();
 }
 
-export async function updateReceipt(receiptId: string, data: Record<string, any>) {
+export async function updateReceipt(receiptId: string, data: Record<string, any>, changedBy?: string) {
+  const payload = changedBy ? { ...data, changed_by: changedBy } : data;
   const res = await fetch(`${API_URL}/api/receipts/${receiptId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("Update failed");
   return res.json();
@@ -59,8 +60,12 @@ export async function updateReceipt(receiptId: string, data: Record<string, any>
 
 // --- Reconciliation API ---
 
-export async function runReconciliation() {
-  const res = await fetch(`${API_URL}/api/reconciliation/run`, { method: "POST" });
+export async function runReconciliation(dateFrom?: string, dateTo?: string) {
+  const p = new URLSearchParams();
+  if (dateFrom) p.set("date_from", dateFrom);
+  if (dateTo) p.set("date_to", dateTo);
+  const qs = p.toString();
+  const res = await fetch(`${API_URL}/api/reconciliation/run${qs ? `?${qs}` : ""}`, { method: "POST" });
   if (!res.ok) throw new Error("Reconciliation failed");
   return res.json();
 }
@@ -77,6 +82,12 @@ export async function fetchReconciliationResults(params?: { classification?: str
   if (params?.match_type) p.set("match_type", params.match_type);
   const res = await fetch(`${API_URL}/api/reconciliation/results?${p}`);
   if (!res.ok) throw new Error("Failed to fetch results");
+  return res.json();
+}
+
+export async function fetchReconciliationProgress() {
+  const res = await fetch(`${API_URL}/api/reconciliation/progress`);
+  if (!res.ok) throw new Error("Failed to fetch progress");
   return res.json();
 }
 
@@ -110,8 +121,14 @@ export async function createAccountingEntry(data: Record<string, any>) {
   return res.json();
 }
 
-export async function fetchAccountingEntries() {
-  const res = await fetch(`${API_URL}/api/accounting-entries?page=1&page_size=200`);
+export async function fetchAccountingEntries(params?: { date_from?: string; date_to?: string; status?: string; page?: number; page_size?: number }) {
+  const p = new URLSearchParams();
+  if (params?.date_from) p.set("date_from", params.date_from);
+  if (params?.date_to) p.set("date_to", params.date_to);
+  if (params?.status) p.set("status", params.status);
+  p.set("page", String(params?.page || 1));
+  p.set("page_size", String(params?.page_size || 200));
+  const res = await fetch(`${API_URL}/api/accounting-entries?${p}`);
   if (!res.ok) throw new Error("Failed to fetch entries");
   return res.json();
 }
@@ -129,5 +146,19 @@ export async function updateAccountingEntry(entryId: string, data: Record<string
 export async function deleteAccountingEntry(entryId: string) {
   const res = await fetch(`${API_URL}/api/accounting-entries/${entryId}`, { method: "DELETE" });
   if (!res.ok) throw new Error("Delete failed");
+  return res.json();
+}
+
+export async function fetchProcessingLogs(params?: { proof_id?: string; date_from?: string; date_to?: string; search?: string; stage?: string; page?: number; page_size?: number }) {
+  const p = new URLSearchParams();
+  if (params?.proof_id) p.set("proof_id", params.proof_id);
+  if (params?.date_from) p.set("date_from", params.date_from);
+  if (params?.date_to) p.set("date_to", params.date_to);
+  if (params?.search) p.set("search", params.search);
+  if (params?.stage) p.set("stage", params.stage);
+  p.set("page", String(params?.page || 1));
+  p.set("page_size", String(params?.page_size || 100));
+  const res = await fetch(`${API_URL}/api/logs?${p}`);
+  if (!res.ok) throw new Error("Failed to fetch logs");
   return res.json();
 }

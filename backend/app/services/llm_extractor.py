@@ -1,6 +1,34 @@
 import json
+import httpx
 from openai import OpenAI
 from app.config import settings
+from app.settings_db import get_all_settings
+
+
+def _get_config():
+    db = get_all_settings()
+    provider = db.get("llm_provider") or settings.llm_provider
+    model = db.get("llm_model") or settings.llm_model
+    if provider == "nvidia":
+        return {
+            "provider": "nvidia",
+            "api_key": db.get("nvidia_api_key") or settings.nvidia_api_key,
+            "base_url": db.get("nvidia_base_url") or settings.nvidia_base_url,
+            "model": db.get("nvidia_model") or settings.nvidia_model,
+        }
+    return {
+        "provider": "openai",
+        "api_key": db.get("openai_api_key") or settings.openai_api_key,
+        "model": model,
+    }
+
+
+def _get_client(cfg: dict):
+    http_client = httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0))
+    if cfg["provider"] == "nvidia":
+        return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], http_client=http_client)
+    return OpenAI(api_key=cfg["api_key"], http_client=http_client)
+
 
 SYSTEM_PROMPT = """You are a payment receipt extractor. Given raw OCR text from a bank payment confirmation PDF, extract structured data as JSON.
 
@@ -31,27 +59,12 @@ Rules:
 FALLBACK_PROMPT = "Extract structured payment data from this text. Even if the text is messy, do your best. Return JSON with: amount, currency, payer_name, bank_issuer, receipt_number, payment_date, description, purchase_currency, transaction_currency, transaction_amount (total in transaction currency, NOT an exchange rate), card_number, card_type, payee, address. Set missing fields to null. Return ONLY JSON."
 
 
-def _get_client():
-    if settings.llm_provider == "nvidia":
-        return OpenAI(
-            api_key=settings.nvidia_api_key,
-            base_url=settings.nvidia_base_url,
-        )
-    return OpenAI(api_key=settings.openai_api_key)
-
-
-def _get_model():
-    if settings.llm_provider == "nvidia":
-        return settings.nvidia_model
-    return settings.llm_model
-
-
 def extract_with_llm(text: str):
     try:
-        client = _get_client()
-        model = _get_model()
+        cfg = _get_config()
+        client = _get_client(cfg)
         response = client.chat.completions.create(
-            model=model,
+            model=cfg["model"],
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": f"Extract payment data from this text:\n\n{text[:3000]}"},
@@ -71,10 +84,10 @@ def extract_with_llm(text: str):
 
 def llm_fallback_extract(text: str):
     try:
-        client = _get_client()
-        model = _get_model()
+        cfg = _get_config()
+        client = _get_client(cfg)
         response = client.chat.completions.create(
-            model=model,
+            model=cfg["model"],
             messages=[
                 {"role": "system", "content": FALLBACK_PROMPT},
                 {"role": "user", "content": text[:3000]},

@@ -114,7 +114,7 @@ def process_whatsapp_pdf(media_id: str, filename: str, sender: str, msg_id: str)
                 f"Amount: {extracted.get('currency', '')} {extracted.get('amount', 'N/A')}\n"
                 f"Payer: {extracted.get('payer_name', 'Unknown')}\n"
                 f"Confidence: {int(confidence * 100)}%\n"
-                f"Please verify: https://tolmaierp.vercel.app/receipts/{result.get('receipt_id', '')}"
+                f"Please verify: https://ai-tolmai.vercel.app/receipts/{result.get('receipt_id', '')}"
             )
             whatsapp_client.send_message(sender, msg)
         else:
