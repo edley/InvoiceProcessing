@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, overrideReclassification, manualMatch, fetchAccountingEntries } from "@/lib/api";
+import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, overrideReclassification, manualMatch, fetchAccountingEntries, createAccountingEntry, updateAccountingEntry, deleteAccountingEntry } from "@/lib/api";
 import {
   Upload, FileText, Receipt, LogOut, RefreshCw, DollarSign, User, Hash, Calendar,
   Building2, CheckCircle, AlertCircle, UploadCloud, Edit3, Shield, AlertTriangle,
@@ -744,6 +744,9 @@ function ReconciliationTab() {
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [allEntries, setAllEntries] = useState<any[]>([]);
+  const [showEntries, setShowEntries] = useState(false);
+  const [entryForm, setEntryForm] = useState<any>({});
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
 
   useEffect(() => { loadData(); }, [classFilter]);
 
@@ -802,6 +805,50 @@ function ReconciliationTab() {
     } catch (e: any) { alert(e.message); } finally { setSaving(false); }
   }
 
+  function resetEntryForm() {
+    setEntryForm({ amount: "", currency: "USD", payer_name: "", payment_date: "", receipt_number: "", description: "", vendor: "", cost_center: "", account_code: "", notes: "" });
+    setEditingEntryId(null);
+  }
+
+  async function handleSaveEntry() {
+    setSaving(true);
+    try {
+      const payload = { ...entryForm, amount: parseFloat(entryForm.amount) || 0 };
+      if (editingEntryId) {
+        await updateAccountingEntry(editingEntryId, payload);
+      } else {
+        await createAccountingEntry(payload);
+      }
+      resetEntryForm();
+      await loadData();
+    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
+
+  async function handleDeleteEntry(id: string) {
+    if (!confirm("Delete this accounting entry?")) return;
+    try {
+      await deleteAccountingEntry(id);
+      await loadData();
+    } catch (e: any) { alert(e.message); }
+  }
+
+  function startEditEntry(e: any) {
+    setEntryForm({
+      amount: e.amount ?? "",
+      currency: e.currency ?? "USD",
+      payer_name: e.payer_name ?? "",
+      payment_date: e.payment_date ?? "",
+      receipt_number: e.receipt_number ?? "",
+      description: e.description ?? "",
+      vendor: e.vendor ?? "",
+      cost_center: e.cost_center ?? "",
+      account_code: e.account_code ?? "",
+      notes: e.notes ?? "",
+    });
+    setEditingEntryId(e.id);
+    setShowEntries(true);
+  }
+
   function classBadge(c: string) {
     const label = c.replace(/_/g, " ");
     const color = CLASS_COLORS[c] || CLASS_COLORS.pending;
@@ -809,12 +856,28 @@ function ReconciliationTab() {
   }
 
   const CLASS_FILTERS = ["", "correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"];
+  const ENTRY_FIELDS = [
+    { label: "Receipt #", key: "receipt_number" },
+    { label: "Amount *", key: "amount", type: "number" },
+    { label: "Currency", key: "currency" },
+    { label: "Payer Name", key: "payer_name" },
+    { label: "Payment Date", key: "payment_date", type: "date" },
+    { label: "Description", key: "description" },
+    { label: "Vendor", key: "vendor" },
+    { label: "Cost Center", key: "cost_center" },
+    { label: "Account Code", key: "account_code" },
+    { label: "Notes", key: "notes" },
+  ];
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-bold">Reconciliation</h2>
         <div className="flex items-center gap-2">
+          <button onClick={() => { resetEntryForm(); setShowEntries(!showEntries); }}
+            className="text-sm text-gray-600 border rounded-lg px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1">
+            <Building2 size={14} /> {showEntries ? "Hide Entries" : "Manage Entries"}
+          </button>
           <button onClick={loadData} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" /> Refresh</button>
           <button onClick={handleRun} disabled={running}
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
@@ -840,6 +903,44 @@ function ReconciliationTab() {
         ))}
       </div>
 
+      {showEntries && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm mb-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-4">{editingEntryId ? "Edit Accounting Entry" : "New Accounting Entry"}</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-4">
+            {ENTRY_FIELDS.map((f) => (
+              <div key={f.key}>
+                <label className="block text-xs text-gray-500 mb-0.5">{f.label}</label>
+                <input type={f.type || "text"} value={entryForm[f.key] ?? ""} onChange={(e) => setEntryForm({ ...entryForm, [f.key]: e.target.value })}
+                  className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleSaveEntry} disabled={saving || !entryForm.amount}
+              className="flex items-center gap-1 text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+              {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {editingEntryId ? "Update" : "Add Entry"}
+            </button>
+            {editingEntryId && <button onClick={resetEntryForm} className="text-xs text-gray-500 px-3 py-1.5 border rounded-lg hover:bg-gray-50">Cancel</button>}
+          </div>
+
+          {allEntries.length > 0 && (
+            <div className="mt-5 space-y-1.5 max-h-60 overflow-y-auto">
+              {allEntries.map((e) => (
+                <div key={e.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg text-xs ${editingEntryId === e.id ? "bg-blue-50" : "bg-gray-50 hover:bg-gray-100"}`}>
+                  <span className="font-medium w-24 truncate">{e.receipt_number || "—"}</span>
+                  <span className="w-20">{e.amount != null ? `${Number(e.amount).toFixed(2)} ${e.currency || ""}` : "—"}</span>
+                  <span className="flex-1 truncate">{e.payer_name || e.vendor || "—"}</span>
+                  <span className="w-16 text-gray-400">{e.status}</span>
+                  <button onClick={() => startEditEntry(e)} className="text-blue-600 hover:text-blue-800"><Edit3 size={12} /></button>
+                  <button onClick={() => handleDeleteEntry(e.id)} className="text-red-500 hover:text-red-700"><X size={12} /></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="mb-4 flex gap-2 flex-wrap items-center">
         {CLASS_FILTERS.map((c) => (
           <button key={c} onClick={() => setClassFilter(c)}
@@ -850,7 +951,7 @@ function ReconciliationTab() {
       </div>
 
       {loading ? <div className="text-center py-8 text-sm text-gray-500">Loading...</div>
-      : results.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No results. Run reconciliation first.</div>
+      : results.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No results. Add accounting entries and run reconciliation.</div>
       : <div className="space-y-2">
           {results.map((r) => {
             const isOpen = expandedId === r.id;

@@ -115,3 +115,19 @@ export async function fetchAccountingEntries() {
   if (!res.ok) throw new Error("Failed to fetch entries");
   return res.json();
 }
+
+export async function updateAccountingEntry(entryId: string, data: Record<string, any>) {
+  const res = await fetch(`${API_URL}/api/accounting-entries/${entryId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Update failed");
+  return res.json();
+}
+
+export async function deleteAccountingEntry(entryId: string) {
+  const res = await fetch(`${API_URL}/api/accounting-entries/${entryId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Delete failed");
+  return res.json();
+}
