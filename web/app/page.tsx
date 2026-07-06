@@ -759,7 +759,11 @@ function ReconciliationTab() {
         fetchAccountingEntries(),
       ]);
       setStats(statsRes);
-      setResults(resultsRes.items || []);
+      const parsedResults = (resultsRes.items || []).map((r: any) => ({
+        ...r,
+        _aa: typeof r.ai_analysis === "string" ? (() => { try { return JSON.parse(r.ai_analysis); } catch { return null; } })() : r.ai_analysis,
+      }));
+      setResults(parsedResults);
       setAllEntries(accRes.items || []);
 
       const eMap: Record<string, any> = {};
@@ -1013,49 +1017,82 @@ function ReconciliationTab() {
                         )}
                       </div>
                     ) : (
-                      <div className="grid grid-cols-2 gap-6">
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Receipt size={14} /> Extracted from PDF</h4>
-                          <div className="space-y-2 text-sm">
-                            {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
-                              const pv = proof?.[f];
-                              const ev = entry?.[f];
-                              const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
-                              return (
-                                <div key={f} className="flex items-center justify-between">
-                                  <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
-                                  <span className={`font-mono text-xs ${!pv ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
-                                    {f === "amount" && pv != null ? `${Number(pv).toFixed(2)}` : String(pv ?? "—")}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                            {r.matched_fields && typeof r.matched_fields === "object" && (
-                              <div className="flex items-center gap-2 pt-1 text-xs">
-                                {Object.entries(r.matched_fields).map(([k, v]) => (
-                                  <span key={k} className={`rounded-full px-2 py-0.5 ${v ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                                    {k.replace(/_/g, " ")} {v ? "✓" : "✗"}
-                                  </span>
+                      <div className="space-y-4">
+                        {proof?.proof_id && (
+                          <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <ExternalLink size={12} />
+                            <span>Source proof: <span className="font-medium text-gray-700">{proof.proof_id}</span></span>
+                          </div>
+                        )}
+                        {r._aa?.summary && (
+                          <div className={`rounded-lg border p-3 text-sm ${
+                            r._aa.risk_level === "high" ? "bg-red-50 border-red-200" :
+                            r._aa.risk_level === "medium" ? "bg-orange-50 border-orange-200" :
+                            "bg-blue-50 border-blue-200"
+                          }`}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-semibold text-gray-600">AI Analysis</span>
+                              <span className={`text-xs font-medium ${
+                                r._aa.risk_level === "high" ? "text-red-600" :
+                                r._aa.risk_level === "medium" ? "text-orange-600" : "text-blue-600"
+                              }`}>Risk: {r._aa.risk_level}</span>
+                            </div>
+                            <p className="text-xs text-gray-700">{r._aa.summary}</p>
+                            {r._aa.details && r._aa.details.length > 0 && (
+                              <ul className="mt-1.5 space-y-0.5">
+                                {r._aa.details.map((d: string, i: number) => (
+                                  <li key={i} className="text-xs text-gray-600 flex items-start gap-1">
+                                    <span className="mt-0.5">•</span> {d}
+                                  </li>
                                 ))}
-                              </div>
+                              </ul>
                             )}
                           </div>
-                        </div>
-                        <div>
-                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Building2 size={14} /> Accounting System</h4>
-                          <div className="space-y-2 text-sm">
-                            {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
-                              const ev = entry?.[f];
-                              const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
-                              return (
-                                <div key={f} className="flex items-center justify-between">
-                                  <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
-                                  <span className={`font-mono text-xs ${!ev ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
-                                    {f === "amount" && ev != null ? `${Number(ev).toFixed(2)}` : String(ev ?? "—")}
-                                  </span>
+                        )}
+                        <div className="grid grid-cols-2 gap-6">
+                          <div>
+                            <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Receipt size={14} /> Extracted from PDF</h4>
+                            <div className="space-y-2 text-sm">
+                              {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                                const pv = proof?.[f];
+                                const ev = entry?.[f];
+                                const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                                return (
+                                  <div key={f} className="flex items-center justify-between">
+                                    <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                    <span className={`font-mono text-xs ${!pv ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                      {f === "amount" && pv != null ? `${Number(pv).toFixed(2)}` : String(pv ?? "—")}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                              {r.matched_fields && typeof r.matched_fields === "object" && (
+                                <div className="flex items-center gap-2 pt-1 text-xs">
+                                  {Object.entries(r.matched_fields).map(([k, v]) => (
+                                    <span key={k} className={`rounded-full px-2 py-0.5 ${v ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                                      {k.replace(/_/g, " ")} {v ? "✓" : "✗"}
+                                    </span>
+                                  ))}
                                 </div>
-                              );
-                            })}
+                              )}
+                            </div>
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Building2 size={14} /> Accounting System</h4>
+                            <div className="space-y-2 text-sm">
+                              {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                                const ev = entry?.[f];
+                                const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                                return (
+                                  <div key={f} className="flex items-center justify-between">
+                                    <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                    <span className={`font-mono text-xs ${!ev ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                      {f === "amount" && ev != null ? `${Number(ev).toFixed(2)}` : String(ev ?? "—")}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
                       </div>

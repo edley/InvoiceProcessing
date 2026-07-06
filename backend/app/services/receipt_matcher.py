@@ -4,6 +4,7 @@ from difflib import SequenceMatcher
 from typing import Optional, Tuple
 
 from app.supabase_client import supabase
+from app.services.reconciliation_analyzer import analyze_discrepancy
 
 
 def _parse_date(d: Optional[str]) -> Optional[datetime]:
@@ -134,6 +135,13 @@ def run_reconciliation() -> dict:
                 "payer_name": _fuzzy_pct(proof.get("payer_name"), entry.get("payer_name")) >= 0.8,
             }
 
+            analysis = None
+            if classification != "correct":
+                try:
+                    analysis = analyze_discrepancy(proof, entry, classification)
+                except Exception:
+                    pass
+
             result = {
                 "proof_receipt_id": proof["id"],
                 "accounting_entry_id": entry["id"],
@@ -145,6 +153,7 @@ def run_reconciliation() -> dict:
                 "matched_fields": json.dumps(matched_fields),
                 "classification": classification,
                 "classification_rules": json.dumps(rules),
+                "ai_analysis": json.dumps(analysis) if analysis else None,
             }
             results.append(result)
             matched_count += 1
