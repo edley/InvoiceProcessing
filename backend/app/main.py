@@ -55,13 +55,15 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-from app.routers import upload, proofs, erp, receipts, whatsapp
+from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(proofs.router, prefix="/api", tags=["proofs"])
 app.include_router(erp.router, prefix="/api", tags=["erp"])
 app.include_router(receipts.router, prefix="/api", tags=["receipts"])
 app.include_router(whatsapp.router, prefix="/api", tags=["whatsapp"])
+app.include_router(accounting.router, prefix="/api", tags=["accounting"])
+app.include_router(reconciliation.router, prefix="/api", tags=["reconciliation"])
 
 
 @app.get("/api/whatsapp/test")

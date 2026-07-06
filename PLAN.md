@@ -449,13 +449,276 @@ ngrok http 8000
 
 ---
 
-## 12. Future / In Progress
+---
 
+## 12. Reconciliation — Cross-Check Extracted Receipts Against Accounting System
+
+### 12.1 Overview
+
+Compare extracted receipt data (`proof_of_payment_receipt`) against accounting system entries (`accounting_receipts`) to detect discrepancies, potential fraud, and data-entry errors.
+
+```
+┌──────────────────────────┐     ┌──────────────────────────┐
+│  proof_of_payment_receipt│     │  accounting_receipts     │
+│  (extracted from PDF)    │     │  (entered by accountant) │
+├──────────────────────────┤     ├──────────────────────────┤
+│  amount: 125.00 EUR      │     │  amount: 125.00 EUR      │
+│  payer: ACME GmbH        │     │  vendor: ACME GmbH       │
+│  date: 2026-04-12        │     │  date: 2026-04-12        │
+│  receipt_no: INV-165     │     │  ref_number: INV-165     │
+│  confidence: 0.7         │     │  status: posted          │
+└──────────┬───────────────┘     └──────────┬───────────────┘
+           │                                │
+           └──────────┬─────────────────────┘
+                      ▼
+          ┌──────────────────────────┐
+          │  reconciliation_results  │
+          ├──────────────────────────┤
+          │  match_type: matched     │
+          │  amount_diff: 0.00       │
+          │  date_diff: 0            │
+          │  classification: correct │
+          │  matching_score: 0.98    │
+          └──────────────────────────┘
+```
+
+### 12.2 New Tables
+
+#### `accounting_receipts` — Accounting system entries
+
+```sql
+CREATE TABLE accounting_receipts (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  receipt_number  TEXT,
+  amount          DOUBLE PRECISION NOT NULL,
+  currency        TEXT DEFAULT 'USD',
+  payer_name      TEXT,
+  payment_date    TEXT,
+  description     TEXT,
+  vendor          TEXT,
+  vendor_vat      TEXT,
+  po_number       TEXT,
+  cost_center     TEXT,
+  account_code    TEXT,
+  status          TEXT DEFAULT 'posted',     -- 'posted' | 'pending' | 'void'
+  notes           TEXT,
+  created_by      UUID,                       -- who entered it
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### `reconciliation_results` — Match results between the two tables
+
+```sql
+CREATE TABLE reconciliation_results (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  proof_receipt_id    UUID REFERENCES proof_of_payment_receipt(id),
+  accounting_entry_id UUID REFERENCES accounting_receipts(id),
+  
+  -- Matching info
+  match_type          TEXT NOT NULL DEFAULT 'auto',   -- 'auto' | 'manual' | 'unmatched_proof' | 'unmatched_entry'
+  matching_score      DOUBLE PRECISION,                -- 0.0 to 1.0
+  
+  -- Comparison results
+  amount_diff         DOUBLE PRECISION,               -- proof.amount - accounting.amount (signed)
+  amount_diff_pct     DOUBLE PRECISION,               -- percentage difference
+  date_diff_days      INTEGER,                         -- days between proof.payment_date and accounting.payment_date
+  matched_fields      JSONB,                           -- {"amount": true, "date": true, "payer_name": false, ...}
+  
+  -- Classification
+  classification      TEXT NOT NULL DEFAULT 'pending', 
+  -- 'correct' | 'minor_mistake' | 'potential_fraud' | 'forensic_required' | 'fraud_detected'
+  
+  classification_rules JSONB,                          -- which rules triggered
+  human_reviewed      BOOLEAN DEFAULT FALSE,
+  reviewed_by         UUID,
+  reviewed_at         TIMESTAMPTZ,
+  notes               TEXT,
+  
+  created_at          TIMESTAMPTZ DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ DEFAULT NOW(),
+  
+  UNIQUE(proof_receipt_id, accounting_entry_id)
+);
+```
+
+### 12.3 Classification Rules
+
+| Classification | Condition | Action |
+|---|---|---|
+| `correct` | Amount match exact (±0.5% tolerance) AND date within ±3 days AND payer/vendor matches | Auto |
+| `minor_mistake` | Amount diff < 5% OR date diff < 30 days (single field mismatch) | Auto |
+| `potential_fraud` | Amount diff 5-20% OR date diff > 30 days OR same receipt submitted twice | Auto |
+| `forensic_required` | Amount diff > 20% OR proof has no matching accounting entry OR accounting entry has no proof | Auto |
+| `fraud_detected` | Manually escalated from `forensic_required` or `potential_fraud` after human review | Manual only |
+
+### 12.4 Matching Strategy
+
+The matcher pairs rows from `proof_of_payment_receipt` with `accounting_receipts`:
+
+```
+For each proof_receipt:
+  1. Try exact receipt_number match (case-insensitive)
+     → if found, matching_score = 0.95+ → auto-match
+
+  2. Try fuzzy match by (amount + date + payer_name):
+     - amount: within ±0.5%
+     - date: within ±3 days
+     - payer_name: fuzzy string similarity > 0.8
+     → matching_score = weighted average
+     → if score > 0.7 → auto-match
+     → if score 0.4-0.7 → flag for manual matching
+
+  3. No match found → unmatched_proof
+
+For each accounting_entry with no match → unmatched_entry
+```
+
+### 12.5 API Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/accounting-entries` | List all accounting entries (with date range, status filter) |
+| `POST /api/accounting-entries` | Create a single entry (manual input) |
+| `POST /api/accounting-entries/bulk` | Bulk import (CSV/JSON) |
+| `PATCH /api/accounting-entries/{id}` | Edit an entry |
+| `DELETE /api/accounting-entries/{id}` | Delete an entry |
+| `POST /api/reconciliation/run` | Trigger matching run |
+| `GET /api/reconciliation/results` | List results (filtered by classification, date) |
+| `PATCH /api/reconciliation/results/{id}` | Manual override of classification, notes |
+| `POST /api/reconciliation/match-manual` | Manually link a proof to an accounting entry |
+
+### 12.6 UI — New "Reconciliation" Tab
+
+A 4th tab in the single-page app:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Dashboard | Proofs | Receipts | Reconciliation (new)       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Header:**
+- Summary cards: Total Matched, Correct, Minor Mistakes, Potential Fraud, Forensic Required
+- "Run Reconciliation" button
+- Classification filter chips (All / Correct / Minor / Potential Fraud / Forensic / Fraud)
+
+**Results Table:**
+| Status | Proof # | Amount | Accounting # | Amount | Diff | Date Diff | Match Score | Actions |
+|--------|---------|--------|--------------|--------|------|-----------|-------------|---------|
+| ✅ Correct | INV-165 | 125.00 | INV-165 | 125.00 | 0.00 | 0 | 0.98 | — |
+| ⚠️ Minor | REC-22 | 50.00 | REC-22 | 49.95 | 0.05 | 1 | 0.85 | Review |
+| 🚩 Potential | PAY-7 | 1000.00 | PAY-7 | 850.00 | 150.00 | 45 | 0.55 | Investigate |
+| 🔍 Forensic | — | 500.00 | — | — | — | — | — | Match manually |
+
+**Row expansion** (click to expand):
+- Shows both proof fields and accounting fields side by side
+- Highlighted differences in red
+- Notes field + classification override dropdown for human reviewers
+- "Mark as Reviewed" button
+
+**Manual Match Dialog:**
+- For unmatched items, let the user select a proof and an accounting entry to link them
+- Or flag as "genuinely unmatched" (e.g., proof is a personal payment, accounting entry is a journal adjustment)
+
+### 12.7 Implementation Phases
+
+#### Phase R1 — Database & API Foundation
+- [ ] Create `accounting_receipts` table (migration 010)
+- [ ] Create `reconciliation_results` table (migration 010)
+- [ ] Create `routers/accounting.py` — CRUD for accounting entries
+- [ ] Create `routers/reconciliation.py` — run matching, get results, manual override
+- [ ] Create `services/receipt_matcher.py` — matching algorithm
+
+#### Phase R2 — Reconciliation Engine
+- [ ] Implement matching logic (receipt_number → fuzzy → unmatched)
+- [ ] Implement classification rules auto-assignment
+- [ ] Test with sample data
+- [ ] API: manual match/link endpoint
+
+#### Phase R3 — UI
+- [ ] Add Reconciliation tab to page.tsx
+- [ ] Summary cards + filter chips
+- [ ] Results table with row expansion
+- [ ] Side-by-side field comparison with diff highlighting
+- [ ] Manual match dialog for unmatched items
+- [ ] Classification override + notes
+
+#### Phase R4 — Bulk Import & Polish
+- [ ] CSV/Excel bulk import for accounting entries
+- [ ] Export reconciliation results (CSV)
+- [ ] Add reconciliation stats to Dashboard
+- [ ] Audit log for classification changes (who changed what, when)
+
+### 12.8 Data Flow (Detailed)
+
+```
+1. Accountant enters transactions → accounting_receipts table
+   (via UI form or CSV bulk import)
+
+2. User clicks "Run Reconciliation"
+   ↓
+3. receipt_matcher.py runs:
+   a. Fetch all proof_of_payment_receipt rows with status in
+      (extracted, reviewed, synced, completed)
+   b. Fetch all accounting_receipts with status = posted
+   c. For each proof, find best match in accounting entries
+      (receipt_number → fuzzy amount+date+payer)
+   d. For each match pair, compute:
+      - amount_diff, amount_diff_pct, date_diff_days
+      - matched_fields map
+      - matching_score
+   e. Apply classification rules → assign classification
+   f. Insert/update reconciliation_results
+
+4. User opens Reconciliation tab → sees results grouped by
+   classification
+
+5. For potential_fraud / forensic_required:
+   a. Expand row → see both records side by side
+   b. Review differences (highlighted)
+   c. Override classification if needed (e.g., correct after
+      investigation, or escalate to fraud_detected)
+   d. Add notes
+
+6. For unmatched_proof:
+   a. Try to find the manual match via dropdown of all accounting entries
+   b. If genuinely unmatched (e.g., cash payment with no ledger entry),
+      mark as "manual" match with a null accounting_entry_id + notes
+
+7. For unmatched_entry:
+   a. Similar manual matching or flag as "no supporting document"
+```
+
+### 12.9 Key Design Decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| **Match algorithm** | Server-side, on-demand | Accounting entries change infrequently; on-demand run avoids real-time sync complexity |
+| **Manual matching** | Required for low-confidence pairs | LLM extraction may miss receipt_number; human judgment needed |
+| **Classification** | Auto-assigned, human-overridable | Reduces manual work while keeping final say with the accountant |
+| **`fraud_detected`** | Manual escalation only | Avoids false positives from automated systems |
+| **Bulk import** | CSV via API + UI | Most accounting systems can export CSV; Excel import also possible via xlsx |
+
+---
+
+## 13. Next Steps
+
+### Immediate (before reconciliation)
 - [ ] Run `007`, `008`, `009` migrations in Supabase SQL Editor
-- [ ] Configure Meta webhook URL → test full WhatsApp inbound flow
-- [ ] Invoice pipeline (new `invoices` table + extraction + UI)
-- [ ] Email ingestion (inbound webhook via SendGrid/Mailgun or IMAP polling)
-- [ ] Deploy backend to production
-- [ ] Deploy frontend to Vercel
-- [ ] Custom domain + SSL
+- [ ] Deploy backend to Railway
+
+### Phase R1 — Reconciliation DB & API
+- [ ] Create `accounting_receipts` + `reconciliation_results` tables
+- [ ] CRUD for accounting entries
+- [ ] Receipt matching engine
+
+### Phase R2 — Reconciliation UI
+- [ ] Reconciliation tab in page.tsx
+- [ ] Results table + diff view + manual matching
+
+### Phase R3 — Polish & Deploy
+- [ ] WhatsApp webhook live
+- [ ] Invoice pipeline
 - [ ] Sentry monitoring
