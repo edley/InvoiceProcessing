@@ -3,15 +3,15 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { uploadProof, updateReceipt } from "@/lib/api";
+import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, overrideReclassification, manualMatch, fetchAccountingEntries } from "@/lib/api";
 import {
   Upload, FileText, Receipt, LogOut, RefreshCw, DollarSign, User, Hash, Calendar,
   Building2, CheckCircle, AlertCircle, UploadCloud, Edit3, Shield, AlertTriangle,
-  ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3
+  ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3, Scale, Flag, Grip
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const TABS = ["Dashboard", "Proofs", "Receipts"] as const;
+const TABS = ["Dashboard", "Proofs", "Receipts", "Reconciliation"] as const;
 type Tab = typeof TABS[number];
 
 const STEP_LABELS: Record<string, string> = {
@@ -64,6 +64,7 @@ export default function HomePage() {
             {t === "Dashboard" && <BarChart3 size={14} className="inline mr-1.5" />}
             {t === "Proofs" && <FileText size={14} className="inline mr-1.5" />}
             {t === "Receipts" && <Receipt size={14} className="inline mr-1.5" />}
+            {t === "Reconciliation" && <Scale size={14} className="inline mr-1.5" />}
             {t}
           </button>
         ))}
@@ -73,6 +74,7 @@ export default function HomePage() {
         {tab === "Dashboard" && <DashboardTab user={user} onNavigate={(t: Tab, f?: string) => { setFilterState(f || ""); setTabKey(k => k + 1); setTab(t); }} />}
         {tab === "Proofs" && <ProofsTab key={`p-${tabKey}`} initialFilter={filterState} />}
         {tab === "Receipts" && <ReceiptsTab key={`r-${tabKey}`} initialFilter={filterState} />}
+        {tab === "Reconciliation" && <ReconciliationTab />}
       </main>
     </div>
   );
@@ -703,6 +705,275 @@ function ReceiptsTab({ initialFilter = "" }: { initialFilter?: string }) {
                           <Edit3 size={16} />
                         </button>
                       )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      }
+    </div>
+  );
+}
+
+/* ========== RECONCILIATION TAB ========== */
+const CLASS_COLORS: Record<string, string> = {
+  correct: "bg-green-100 text-green-800 border-green-200",
+  minor_mistake: "bg-yellow-100 text-yellow-800 border-yellow-200",
+  potential_fraud: "bg-orange-100 text-orange-800 border-orange-200",
+  forensic_required: "bg-red-100 text-red-800 border-red-200",
+  fraud_detected: "bg-red-200 text-red-900 border-red-300",
+  pending: "bg-gray-100 text-gray-600 border-gray-200",
+};
+
+const FIELD_LABELS: Record<string, string> = {
+  amount: "Amount", currency: "Currency", payer_name: "Payer / Vendor",
+  payment_date: "Date", receipt_number: "Receipt #", description: "Description",
+};
+
+function ReconciliationTab() {
+  const [results, setResults] = useState<any[]>([]);
+  const [proofsById, setProofsById] = useState<Record<string, any>>({});
+  const [entriesById, setEntriesById] = useState<Record<string, any>>({});
+  const [stats, setStats] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [classFilter, setClassFilter] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [allEntries, setAllEntries] = useState<any[]>([]);
+
+  useEffect(() => { loadData(); }, [classFilter]);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [statsRes, resultsRes, accRes] = await Promise.all([
+        fetchReconciliationStats(),
+        fetchReconciliationResults(classFilter ? { classification: classFilter } : undefined),
+        fetchAccountingEntries(),
+      ]);
+      setStats(statsRes);
+      setResults(resultsRes.items || []);
+      setAllEntries(accRes.items || []);
+
+      const eMap: Record<string, any> = {};
+      (accRes.items || []).forEach((e: any) => { eMap[e.id] = e; });
+      setEntriesById(eMap);
+
+      const proofIds = Array.from(new Set((resultsRes.items || []).map((r: any) => r.proof_receipt_id).filter(Boolean)));
+      if (proofIds.length > 0) {
+        const pMap: Record<string, any> = {};
+        const p = new URLSearchParams({ page: "1", page_size: "200" });
+        const pr = await fetch(`${API}/api/receipts?${p}`);
+        const pd = await pr.json();
+        (pd.items || []).forEach((r: any) => { pMap[r.id] = r; });
+        setProofsById(pMap);
+      }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  }
+
+  async function handleRun() {
+    setRunning(true);
+    try {
+      await runReconciliation();
+      await loadData();
+    } catch (e: any) { alert(e.message); } finally { setRunning(false); }
+  }
+
+  async function handleOverride(resultId: string, classification: string) {
+    setSaving(true);
+    try {
+      await overrideReclassification(resultId, { classification, notes, human_reviewed: true });
+      await loadData();
+      setNotes("");
+    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
+
+  async function handleManualMatch(resultId: string, proofReceiptId: string, entryId: string) {
+    setSaving(true);
+    try {
+      await manualMatch({ proof_receipt_id: proofReceiptId, accounting_entry_id: entryId || undefined, notes });
+      await loadData();
+      setNotes("");
+      setExpandedId(null);
+    } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+  }
+
+  function classBadge(c: string) {
+    const label = c.replace(/_/g, " ");
+    const color = CLASS_COLORS[c] || CLASS_COLORS.pending;
+    return <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border ${color}`}>{label}</span>;
+  }
+
+  const CLASS_FILTERS = ["", "correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"];
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold">Reconciliation</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={loadData} className="text-sm text-gray-500 hover:text-blue-600"><RefreshCw size={14} className="inline mr-1" /> Refresh</button>
+          <button onClick={handleRun} disabled={running}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+            {running ? <Loader2 size={14} className="animate-spin" /> : <Scale size={14} />}
+            {running ? "Running..." : "Run Reconciliation"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 mb-5 sm:grid-cols-6">
+        {[
+          { label: "Total", key: "total", color: "bg-gray-50 text-gray-700" },
+          { label: "Correct", key: "correct", color: "bg-green-50 text-green-700" },
+          { label: "Minor", key: "minor_mistake", color: "bg-yellow-50 text-yellow-700" },
+          { label: "Potential Fraud", key: "potential_fraud", color: "bg-orange-50 text-orange-700" },
+          { label: "Forensic", key: "forensic_required", color: "bg-red-50 text-red-700" },
+          { label: "Fraud", key: "fraud_detected", color: "bg-red-100 text-red-800" },
+        ].map((s) => (
+          <div key={s.key} className={`rounded-lg border p-3 ${s.color}`}>
+            <div className="text-xs opacity-70">{s.label}</div>
+            <div className="text-xl font-bold">{stats[s.key] ?? 0}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-4 flex gap-2 flex-wrap items-center">
+        {CLASS_FILTERS.map((c) => (
+          <button key={c} onClick={() => setClassFilter(c)}
+            className={`rounded-full px-3 py-1 text-xs ${classFilter === c ? "bg-blue-600 text-white" : "bg-white border text-gray-600 hover:bg-gray-50"}`}>
+            {c ? c.replace(/_/g, " ") : "All"}
+          </button>
+        ))}
+      </div>
+
+      {loading ? <div className="text-center py-8 text-sm text-gray-500">Loading...</div>
+      : results.length === 0 ? <div className="text-center py-8 text-sm text-gray-500">No results. Run reconciliation first.</div>
+      : <div className="space-y-2">
+          {results.map((r) => {
+            const isOpen = expandedId === r.id;
+            const proof = r.proof_receipt_id ? proofsById[r.proof_receipt_id] : null;
+            const entry = r.accounting_entry_id ? entriesById[r.accounting_entry_id] : null;
+            const isUnmatched = r.match_type === "unmatched_proof" || r.match_type === "unmatched_entry";
+            return (
+              <div key={r.id} className={`rounded-xl border bg-white shadow-sm overflow-hidden ${CLASS_COLORS[r.classification]?.replace("bg-", "ring-1 ring-").replace("border-", "").replace("100", "200").replace("200", "300") || ""}`}>
+                <button onClick={() => setExpandedId(isOpen ? null : r.id)}
+                  className="w-full flex items-center gap-3 px-5 py-3 hover:bg-gray-50 text-left transition-colors">
+                  <div className="shrink-0 text-gray-400">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</div>
+                  <div className="flex-1 min-w-0 grid grid-cols-5 gap-3 text-sm">
+                    {isUnmatched ? (
+                      <>
+                        <span className="text-xs text-gray-400 col-span-2">{r.match_type === "unmatched_proof" ? "Proof has no accounting match" : "Accounting entry has no proof"}</span>
+                        <span className="text-xs text-gray-400">{r.match_type.replace(/_/g, " ")}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="truncate font-medium">{proof?.receipt_number || proof?.payer_name || "Proof"}</span>
+                        <span className="truncate">{proof?.amount != null ? `${Number(proof.amount).toFixed(2)} ${proof.currency || ""}` : "—"}</span>
+                        <span className="truncate">{entry?.receipt_number || entry?.vendor || "Entry"}</span>
+                        <span className="truncate">{entry?.amount != null ? `${Number(entry.amount).toFixed(2)} ${entry.currency || ""}` : "—"}</span>
+                        <span className="truncate">{r.amount_diff != null ? `${r.amount_diff >= 0 ? "+" : ""}${Number(r.amount_diff).toFixed(2)}` : "—"}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                    {r.matching_score != null && r.matching_score > 0 && (
+                      <span className="text-xs text-gray-400">{(r.matching_score * 100).toFixed(0)}%</span>
+                    )}
+                    {classBadge(r.classification)}
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="border-t bg-gray-50 px-5 py-4 space-y-4">
+                    {isUnmatched ? (
+                      <div className="space-y-3">
+                        <p className="text-sm text-gray-600">{r.match_type === "unmatched_proof" ? "This receipt has no matching entry in the accounting system." : "This accounting entry has no supporting proof document."}</p>
+                        {r.match_type === "unmatched_proof" ? (
+                          <div className="flex items-center gap-3">
+                            <select id={`match-entry-${r.id}`} className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs bg-white flex-1"
+                              defaultValue="">
+                              <option value="" disabled>Select accounting entry to link...</option>
+                              {allEntries.filter((e) => e.status === "posted").map((e) => (
+                                <option key={e.id} value={e.id}>{e.receipt_number || e.vendor || e.id.slice(0, 8)} — {e.amount} {e.currency}</option>
+                              ))}
+                            </select>
+                            <button onClick={() => {
+                              const sel = document.getElementById(`match-entry-${r.id}`) as HTMLSelectElement;
+                              if (sel?.value) handleManualMatch(r.id, r.proof_receipt_id, sel.value);
+                            }} disabled={saving}
+                              className="text-xs text-white bg-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                              {saving ? <Loader2 size={12} className="animate-spin" /> : "Link & Mark Reviewed"}
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400">No action needed — the proof document for this entry was not uploaded.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-6">
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Receipt size={14} /> Extracted from PDF</h4>
+                          <div className="space-y-2 text-sm">
+                            {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                              const pv = proof?.[f];
+                              const ev = entry?.[f];
+                              const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                              return (
+                                <div key={f} className="flex items-center justify-between">
+                                  <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                  <span className={`font-mono text-xs ${!pv ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                    {f === "amount" && pv != null ? `${Number(pv).toFixed(2)}` : String(pv ?? "—")}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            {r.matched_fields && typeof r.matched_fields === "object" && (
+                              <div className="flex items-center gap-2 pt-1 text-xs">
+                                {Object.entries(r.matched_fields).map(([k, v]) => (
+                                  <span key={k} className={`rounded-full px-2 py-0.5 ${v ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                                    {k.replace(/_/g, " ")} {v ? "✓" : "✗"}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-1.5"><Building2 size={14} /> Accounting System</h4>
+                          <div className="space-y-2 text-sm">
+                            {["amount", "currency", "payer_name", "payment_date", "receipt_number", "description"].map((f) => {
+                              const ev = entry?.[f];
+                              const isDiff = f === "amount" && r.amount_diff != null && Math.abs(r.amount_diff_pct) > 0.5;
+                              return (
+                                <div key={f} className="flex items-center justify-between">
+                                  <span className="text-gray-500 text-xs w-28">{FIELD_LABELS[f]}</span>
+                                  <span className={`font-mono text-xs ${!ev ? "text-gray-300" : isDiff ? "text-red-600 font-semibold" : "text-gray-800"}`}>
+                                    {f === "amount" && ev != null ? `${Number(ev).toFixed(2)}` : String(ev ?? "—")}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t flex items-end gap-3">
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-500 mb-1">Notes</label>
+                        <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+                          placeholder="Add note..." className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-blue-500 focus:outline-none" />
+                      </div>
+                      <select defaultValue="" onChange={(e) => { if (e.target.value) handleOverride(r.id, e.target.value); }}
+                        className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs bg-white">
+                        <option value="" disabled>Override classification...</option>
+                        {["correct", "minor_mistake", "potential_fraud", "forensic_required", "fraud_detected"].map((c) => (
+                          <option key={c} value={c}>{c.replace(/_/g, " ")}</option>
+                        ))}
+                      </select>
+                      {r.human_reviewed && <span className="text-xs text-green-600 flex items-center gap-1"><CheckCircle size={12} /> Reviewed</span>}
                     </div>
                   </div>
                 )}

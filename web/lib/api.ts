@@ -56,3 +56,62 @@ export async function updateReceipt(receiptId: string, data: Record<string, any>
   if (!res.ok) throw new Error("Update failed");
   return res.json();
 }
+
+// --- Reconciliation API ---
+
+export async function runReconciliation() {
+  const res = await fetch(`${API_URL}/api/reconciliation/run`, { method: "POST" });
+  if (!res.ok) throw new Error("Reconciliation failed");
+  return res.json();
+}
+
+export async function fetchReconciliationStats() {
+  const res = await fetch(`${API_URL}/api/reconciliation/stats`);
+  if (!res.ok) throw new Error("Failed to fetch stats");
+  return res.json();
+}
+
+export async function fetchReconciliationResults(params?: { classification?: string; match_type?: string }) {
+  const p = new URLSearchParams({ page: "1", page_size: "200" });
+  if (params?.classification) p.set("classification", params.classification);
+  if (params?.match_type) p.set("match_type", params.match_type);
+  const res = await fetch(`${API_URL}/api/reconciliation/results?${p}`);
+  if (!res.ok) throw new Error("Failed to fetch results");
+  return res.json();
+}
+
+export async function overrideReclassification(resultId: string, data: { classification?: string; notes?: string; human_reviewed?: boolean }) {
+  const res = await fetch(`${API_URL}/api/reconciliation/results/${resultId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Override failed");
+  return res.json();
+}
+
+export async function manualMatch(data: { proof_receipt_id: string; accounting_entry_id?: string; notes?: string }) {
+  const res = await fetch(`${API_URL}/api/reconciliation/match-manual`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Manual match failed");
+  return res.json();
+}
+
+export async function createAccountingEntry(data: Record<string, any>) {
+  const res = await fetch(`${API_URL}/api/accounting-entries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Create failed");
+  return res.json();
+}
+
+export async function fetchAccountingEntries() {
+  const res = await fetch(`${API_URL}/api/accounting-entries?page=1&page_size=200`);
+  if (!res.ok) throw new Error("Failed to fetch entries");
+  return res.json();
+}
