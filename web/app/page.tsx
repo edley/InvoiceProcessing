@@ -8,11 +8,11 @@ import {
   Upload, FileText, Receipt, LogOut, RefreshCw, DollarSign, User, Hash, Calendar,
   Building2, CheckCircle, AlertCircle, UploadCloud, Edit3, Shield, AlertTriangle,
   ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3, Scale, Flag, Grip,
-  Settings, ClipboardList, Menu, Database, Plus, Trash2, Filter, Check, History
+  Settings, ClipboardList, Menu, Database, Plus, Trash2, Filter, Check, History, Eye, ListChecks, UserCheck, Copy
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const TABS = ["Dashboard", "Upload", "Proofs", "Receipts", "Reconciliation", "Entries", "Logs"] as const;
+const TABS = ["Dashboard", "Upload", "Proofs", "Receipts", "Reconciliation", "Forensic", "Entries", "Logs"] as const;
 type Tab = typeof TABS[number];
 
 const SIDEBAR_ITEMS: { key: Tab; label: string; icon: any }[] = [
@@ -22,6 +22,7 @@ const SIDEBAR_ITEMS: { key: Tab; label: string; icon: any }[] = [
   { key: "Receipts", label: "Receipts", icon: Receipt },
   { key: "Reconciliation", label: "Reconciliation", icon: Scale },
   { key: "Entries", label: "Entries", icon: Database },
+  { key: "Forensic", label: "Forensic", icon: Shield },
   { key: "Logs", label: "Processing Log", icon: ClipboardList },
 ];
 
@@ -198,7 +199,8 @@ export default function HomePage() {
           {tab === "Upload" && <UploadTab user={user} />}
           {tab === "Proofs" && <ProofsTab key={`p-${tabKey}`} initialFilter={filterState} />}
           {tab === "Receipts" && <ReceiptsTab key={`r-${tabKey}`} initialFilter={filterState} user={user} />}
-          {tab === "Reconciliation" && <ReconciliationTab />}
+          {tab === "Reconciliation" && <ReconciliationTab key={`rec-${tabKey}`} initialFilter={filterState} />}
+          {tab === "Forensic" && <ForensicTab />}
           {tab === "Entries" && <AccountingEntriesTab />}
           {tab === "Logs" && <ProcessingLogTab />}
         </main>
@@ -1038,10 +1040,11 @@ function UploadTab({ user }: { user: any }) {
 
 /* ========== DASHBOARD TAB ========== */
 function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, filter?: string) => void }) {
-  const [stats, setStats] = useState({ proofs: 0, receipts: 0, review: 0, ready: 0 });
+  const [ds, setDs] = useState<any>(null);
   const [docTypeStats, setDocTypeStats] = useState<Record<string, number>>({});
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [forensicSummary, setForensicSummary] = useState<any>(null);
 
   useEffect(() => { loadStats(); }, [dateFrom, dateTo]);
 
@@ -1054,22 +1057,28 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
 
   async function loadStats() {
     try {
-      const [pr, rr, rv, rd, ...dtRes] = await Promise.all([
-        fetch(`${API}/api/proofs?${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/receipts?${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/receipts?status=review_needed&${dateParams()}`).then(r => r.json()),
-        fetch(`${API}/api/proofs?status=ready_to_process&${dateParams()}`).then(r => r.json()),
+      const [dashData, fs, ...dtRes] = await Promise.all([
+        fetch(`${API}/api/dashboard/stats`).then(r => r.json()),
+        fetch(`${API}/api/forensic/summary`).then(r => r.json()).catch(() => null),
         ...["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"].map(
           dt => fetch(`${API}/api/proofs?document_type=${dt}&${dateParams()}`).then(r => r.json())
         ),
       ]);
-      setStats({ proofs: pr.total || 0, receipts: rr.total || 0, review: rv.total || 0, ready: rd.total || 0 });
+      setDs(dashData);
+      setForensicSummary(fs);
       const dtLabels = ["receipt","invoice","payment_proof","id","passport","driving_license","birth_certificate","other","unclassified"];
       const dtMap: Record<string, number> = {};
       dtRes.forEach((d, i) => { if (d.total > 0) dtMap[dtLabels[i]] = d.total; });
       setDocTypeStats(dtMap);
     } catch (_) {}
   }
+
+  const p = ds?.proofs || { total: 0, completed_pct: 0, by_status: {} };
+  const r = ds?.receipts || { total: 0, reviewed_pct: 0, needing_review: 0, by_status: {} };
+  const rec = ds?.reconciliation || { total: 0, fraud_pct: 0, fraud_count: 0, by_classification: {} };
+  const audit = ds?.audit || { receipts_with_audit: 0, receipts_without_audit: 0, coverage_pct: 0 };
+  const hi = ds?.human_intervention || { receipts_needing_review: 0, unmatched_proofs: 0, potential_fraud: 0, forensic_required: 0, total_pending: 0 };
+  const fs = forensicSummary || { total_flags: 0, high_risk: 0, by_type: {} };
 
   return (
     <div className="space-y-6">
@@ -1088,21 +1097,156 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
         )}
       </div>
 
-      {/* Stat cards */}
+      {/* Top stat cards */}
       <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Total Proofs", value: stats.proofs, icon: FileText, color: "text-blue-600 bg-blue-50", tab: "Proofs" as Tab, filter: "" },
-          { label: "Total Receipts", value: stats.receipts, icon: Receipt, color: "text-purple-600 bg-purple-50", tab: "Receipts" as Tab, filter: "" },
-          { label: "Needs Review", value: stats.review, icon: AlertTriangle, color: "text-orange-600 bg-orange-50", tab: "Receipts" as Tab, filter: "review_needed" },
-          { label: "Ready to Process", value: stats.ready, icon: CheckCircle, color: "text-green-600 bg-green-50", tab: "Proofs" as Tab, filter: "ready_to_process" },
+          { label: "Total Proofs", value: p.total, icon: FileText, color: "text-blue-600 bg-blue-50", tab: "Proofs" as Tab, filter: "" },
+          { label: "Total Receipts", value: r.total, icon: Receipt, color: "text-purple-600 bg-purple-50", tab: "Receipts" as Tab, filter: "" },
+          { label: "Needs Review", value: r.needing_review, icon: AlertTriangle, color: "text-orange-600 bg-orange-50", tab: "Receipts" as Tab, filter: "review_needed" },
+          { label: "Pending Human", value: hi.total_pending, icon: UserCheck, color: "text-red-600 bg-red-50", tab: "Receipts" as Tab, filter: "review_needed" },
         ].map((s) => (
-          <button key={s.label} onClick={() => onNavigate(s.tab, s.filter)}
+          <button key={s.label} onClick={() => s.tab && onNavigate(s.tab, s.filter)}
             className="rounded-xl border bg-white p-5 shadow-sm flex items-center gap-4 cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all text-left">
             <div className={`rounded-lg p-3 ${s.color}`}><s.icon size={24} /></div>
             <div><div className="text-2xl font-bold">{s.value}</div><div className="text-xs text-gray-500">{s.label}</div></div>
           </button>
         ))}
       </div>
+
+      {/* Progress & Fraud Summary */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {/* Completion progress */}
+        <div className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><CheckCircle size={15} className="text-green-500" /> Completion</h3>
+            <span className="text-xs text-gray-400">{p.total} proofs</span>
+          </div>
+          <ProgressBar value={p.completed_pct} label="Processed" color="bg-green-500" />
+          <ProgressBar value={r.reviewed_pct} label="Reviewed" color="bg-purple-500" />
+        </div>
+
+        {/* Fraud Detection */}
+        <div className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><Shield size={15} className="text-red-500" /> Fraud Detection</h3>
+            <span className="text-xs text-gray-400">{rec.total} matched</span>
+          </div>
+          {rec.total > 0 ? (
+            <div className="space-y-1.5">
+              {[
+                { key: "correct", label: "Correct", color: "bg-green-500", count: rec.by_classification?.correct || 0 },
+                { key: "minor_mistake", label: "Minor Mistakes", color: "bg-yellow-400", count: rec.by_classification?.minor_mistake || 0 },
+                { key: "potential_fraud", label: "Potential Fraud", color: "bg-orange-500", count: rec.by_classification?.potential_fraud || 0 },
+                { key: "forensic_required", label: "Forensic Required", color: "bg-red-500", count: rec.by_classification?.forensic_required || 0 },
+                { key: "fraud_detected", label: "Fraud Detected", color: "bg-red-700", count: rec.by_classification?.fraud_detected || 0 },
+              ].map(({ key, label, color, count }) => (
+                count > 0 && (
+                  <button key={key} onClick={() => onNavigate("Reconciliation", key)}
+                    className="w-full flex items-center gap-2 text-xs cursor-pointer hover:opacity-80">
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${color}`} />
+                    <span className="flex-1 text-gray-600">{label}</span>
+                    <span className="font-medium text-gray-800">{count}</span>
+                    <div className="text-[10px] text-gray-400 w-8 text-right">{Math.round(count / rec.total * 100)}%</div>
+                  </button>
+                )
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-400">Run reconciliation to see results</p>
+          )}
+        </div>
+      </div>
+
+      {/* Audit Coverage */}
+      {r.total > 0 && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2"><History size={15} className="text-indigo-500" /> Audit Trail Coverage</h3>
+            <span className="text-xs text-gray-400">{r.total} receipts</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <div className="h-3 rounded-full bg-gray-100 overflow-hidden">
+                <div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${audit.coverage_pct}%` }} />
+              </div>
+              <div className="flex justify-between mt-1 text-xs text-gray-500">
+                <span>{audit.receipts_with_audit} with audit trail</span>
+                <span>{audit.receipts_without_audit} without</span>
+              </div>
+            </div>
+            <div className="text-right shrink-0">
+              <div className="text-2xl font-bold text-indigo-600">{audit.coverage_pct}%</div>
+              <div className="text-[10px] text-gray-400">coverage</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Human in the Loop — Intervention Required */}
+      {hi.total_pending > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50/40 p-5 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="rounded-lg p-2 bg-red-100 text-red-600"><UserCheck size={18} /></div>
+            <div>
+              <h3 className="text-sm font-semibold text-red-800">Human Intervention Required</h3>
+              <p className="text-xs text-red-600">{hi.total_pending} items need your attention</p>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              { label: "Receipts to Review", value: hi.receipts_needing_review, icon: Eye, tab: "Receipts" as Tab, filter: "review_needed", color: "bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200" },
+              { label: "Potential Fraud", value: hi.potential_fraud, icon: Flag, tab: "Reconciliation" as Tab, filter: "potential_fraud", color: "bg-red-100 text-red-700 border-red-200 hover:bg-red-200" },
+              { label: "Forensic Required", value: hi.forensic_required, icon: Search, tab: "Reconciliation" as Tab, filter: "forensic_required", color: "bg-rose-100 text-rose-700 border-rose-200 hover:bg-rose-200" },
+            ].filter(c => c.value > 0).map(c => (
+              <button key={c.label} onClick={() => onNavigate(c.tab, c.filter)}
+                className={`rounded-xl border p-4 text-left cursor-pointer transition-all hover:shadow-sm ${c.color} bg-opacity-50`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <c.icon size={16} />
+                  <span className="text-xs font-semibold">{c.label}</span>
+                </div>
+                <div className="text-2xl font-bold">{c.value}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Forensic Summary Card */}
+      {fs.total_flags > 0 && (
+        <div className="rounded-xl border bg-gradient-to-r from-indigo-50 to-violet-50 p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="rounded-lg p-2 bg-indigo-100 text-indigo-600"><Shield size={18} /></div>
+              <div>
+                <h3 className="text-sm font-semibold text-indigo-900">Forensic Analysis</h3>
+                <p className="text-xs text-indigo-600">{fs.total_flags} total flags</p>
+              </div>
+            </div>
+            <button onClick={() => onNavigate("Forensic" as Tab)}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 bg-white px-3 py-1.5 rounded-lg border border-indigo-200 hover:bg-indigo-50 transition-all">
+              View Details →
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[
+              { label: "Benford", value: fs.by_type?.benford || 0, color: "text-blue-600" },
+              { label: "Duplicates", value: fs.by_type?.duplicate || 0, color: "text-orange-600" },
+              { label: "Anomalies", value: fs.by_type?.anomaly || 0, color: "text-red-600" },
+            ].filter(s => s.value > 0).map(s => (
+              <div key={s.label} className="bg-white/80 rounded-lg p-3 text-center border border-indigo-100">
+                <div className={`text-lg font-bold ${s.color}`}>{s.value}</div>
+                <div className="text-[10px] text-gray-500">{s.label}</div>
+              </div>
+            ))}
+          </div>
+          {fs.high_risk > 0 && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              <AlertTriangle size={12} />
+              <span>{fs.high_risk} high-risk flag{fs.high_risk > 1 ? "s" : ""} require immediate attention</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Document type distribution */}
       {Object.keys(docTypeStats).length > 0 && (
@@ -1123,6 +1267,440 @@ function DashboardTab({ user, onNavigate }: { user: any; onNavigate: (tab: Tab, 
               </button>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressBar({ value, label, color }: { value: number; label: string; color: string }) {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <span className="text-xs text-gray-500 w-20 shrink-0">{label}</span>
+      <div className="flex-1 h-2.5 rounded-full bg-gray-100 overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${Math.min(value, 100)}%` }} />
+      </div>
+      <span className="text-xs font-medium text-gray-700 w-12 text-right">{value}%</span>
+    </div>
+  );
+}
+
+/* ========== FORENSIC TAB ========== */
+function ForensicTab() {
+  const [benford, setBenford] = useState<any>(null);
+  const [duplicates, setDuplicates] = useState<any[]>([]);
+  const [anomalies, setAnomalies] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<any>({ status: "idle", progress: 0, current_step: "", message: "" });
+  const [activeSection, setActiveSection] = useState<string>("benford");
+  const [dupPage, setDupPage] = useState(1);
+  const [dupTotal, setDupTotal] = useState(0);
+  const [anomPage, setAnomPage] = useState(1);
+  const [anomTotal, setAnomTotal] = useState(0);
+  const [runs, setRuns] = useState<any[]>([]);
+  const pollRef = useRef<any>(null);
+
+  useEffect(() => {
+    loadData();
+    loadRuns();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [sum, ben, dupRes, anomRes] = await Promise.all([
+        fetch(`${API}/api/forensic/summary`).then(r => r.json()),
+        fetch(`${API}/api/forensic/benford`).then(r => r.json()),
+        fetch(`${API}/api/forensic/duplicates?page=1&page_size=50`).then(r => r.json()),
+        fetch(`${API}/api/forensic/anomalies?page=1&page_size=50`).then(r => r.json()),
+      ]);
+      setSummary(sum);
+      setBenford(ben);
+      setDuplicates(dupRes.items || []);
+      setDupTotal(dupRes.total_groups || 0);
+      setAnomalies(anomRes.items || []);
+      setAnomTotal(anomRes.total || 0);
+    } catch (_) {}
+    setLoading(false);
+  }
+
+  function loadRuns() {
+    fetch(`${API}/api/forensic/runs?page=1&page_size=5`).then(r => r.json()).then(d => {
+      setRuns(d.items || []);
+    }).catch(() => {});
+  }
+
+  function startPolling() {
+    pollRef.current = setInterval(async () => {
+      try {
+        const p = await fetch(`${API}/api/forensic/progress`).then(r => r.json());
+        setProgress(p);
+        if (p.status === "completed" || p.status === "failed") {
+          clearInterval(pollRef.current!);
+          pollRef.current = null;
+          setRunning(false);
+          loadData();
+          loadRuns();
+        }
+      } catch (_) {}
+    }, 1000);
+  }
+
+  async function handleRun() {
+    setRunning(true);
+    setProgress({ status: "running", progress: 0, current_step: "Starting...", message: "" });
+    try {
+      await fetch(`${API}/api/forensic/run`, { method: "POST" });
+      startPolling();
+    } catch (e: any) {
+      setRunning(false);
+      setProgress({ status: "failed", progress: 0, current_step: "Failed to start", message: e.message });
+    }
+  }
+
+  function loadMoreAnomalies(page: number) {
+    setAnomPage(page);
+    fetch(`${API}/api/forensic/anomalies?page=${page}&page_size=50`).then(r => r.json()).then(d => {
+      setAnomalies(d.items || []);
+      setAnomTotal(d.total || 0);
+    }).catch(() => {});
+  }
+
+  function loadMoreDuplicates(page: number) {
+    setDupPage(page);
+    fetch(`${API}/api/forensic/duplicates?page=${page}&page_size=50`).then(r => r.json()).then(d => {
+      setDuplicates(d.items || []);
+      setDupTotal(d.total_groups || 0);
+    }).catch(() => {});
+  }
+
+  const isRunning = running || progress.status === "running";
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div>
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <Shield size={22} className="text-indigo-600" />
+            Forensic Analysis
+          </h2>
+          <p className="text-xs text-gray-500 mt-0.5">Benford's Law &middot; Duplicate Detection &middot; Anomaly Scoring</p>
+        </div>
+        <button onClick={handleRun} disabled={isRunning}
+          className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-5 py-2.5 text-sm font-medium hover:from-indigo-700 hover:to-violet-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all">
+          {isRunning ? (
+            <>
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Running...
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Run Full Analysis
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Animated Progress Bar */}
+      {isRunning && (
+        <div className="mb-6 rounded-xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-violet-50 p-5 shadow-sm">
+          <div className="flex items-center gap-4 mb-3">
+            <div className="relative">
+              <svg className="w-10 h-10 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="#e0e7ff" strokeWidth="3" />
+                <circle cx="12" cy="12" r="10" stroke="#6366f1" strokeWidth="3"
+                  strokeDasharray={`${2 * Math.PI * 10}`}
+                  strokeDashoffset={`${2 * Math.PI * 10 * (1 - progress.progress / 100)}`}
+                  strokeLinecap="round" />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-indigo-600 animate-ping" />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-sm font-semibold text-indigo-900">{progress.current_step || "Initializing..."}</span>
+                <span className="text-xs font-medium text-indigo-600">{progress.progress}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-indigo-200 overflow-hidden">
+                <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all duration-500"
+                  style={{ width: `${Math.min(progress.progress, 100)}%` }} />
+              </div>
+              {progress.message && (
+                <p className="text-xs text-gray-500 mt-1.5 truncate">{progress.message}</p>
+              )}
+            </div>
+          </div>
+          {/* Gear icons */}
+          <div className="flex items-center justify-center gap-6 text-indigo-400">
+            {["Benford's Law", "Duplicates", "Anomalies"].map((step, i) => {
+              const stepProgress = progress.progress || 0;
+              const active = stepProgress > i * 30 && stepProgress <= (i + 1) * 30;
+              const done = stepProgress > (i + 1) * 30;
+              return (
+                <div key={step} className={`flex items-center gap-1.5 text-xs transition-all ${done ? "text-green-600" : active ? "text-indigo-600 font-semibold scale-105" : "text-gray-400"}`}>
+                  <svg className={`w-4 h-4 ${active ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                  {done ? <CheckCircle size={14} /> : null}
+                  {step}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Summary Cards */}
+      {summary && !isRunning && (
+        <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4 mb-6">
+          {[
+            { label: "Total Flags", value: summary.total_flags, color: "text-indigo-600 bg-indigo-50", icon: Shield },
+            { label: "Benford Flags", value: summary.by_type?.benford || 0, color: "text-blue-600 bg-blue-50", icon: BarChart3 },
+            { label: "Duplicate Groups", value: summary.by_type?.duplicate || 0, color: "text-orange-600 bg-orange-50", icon: Copy },
+            { label: "High Risk", value: summary.high_risk, color: "text-red-600 bg-red-50", icon: AlertTriangle },
+          ].map((s) => (
+            <div key={s.label} className="rounded-xl border bg-white p-5 shadow-sm flex items-center gap-4">
+              <div className={`rounded-lg p-3 ${s.color}`}><s.icon size={24} /></div>
+              <div><div className="text-2xl font-bold">{s.value}</div><div className="text-xs text-gray-500">{s.label}</div></div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Section Tabs */}
+      {!isRunning && summary && summary.total_flags > 0 && (
+        <div className="mb-4 flex gap-1.5 flex-wrap">
+          {[
+            { key: "benford", label: "Benford's Law", count: summary.by_type?.benford || 0 },
+            { key: "duplicates", label: "Duplicates", count: summary.by_type?.duplicate || 0 },
+            { key: "anomalies", label: "Anomalies", count: summary.by_type?.anomaly || 0 },
+          ].map((s) => (
+            <button key={s.key} onClick={() => setActiveSection(s.key)}
+              className={`rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
+                activeSection === s.key ? "bg-indigo-600 text-white shadow-sm" : "bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
+              }`}>
+              {s.label} {s.count > 0 && <span className="ml-1 opacity-70">({s.count})</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && !isRunning && summary?.total_flags === 0 && (
+        <div className="rounded-xl border-2 border-dashed border-gray-200 p-12 text-center">
+          <Shield size={40} className="mx-auto text-gray-300 mb-3" />
+          <p className="text-sm font-medium text-gray-600 mb-1">No forensic flags yet</p>
+          <p className="text-xs text-gray-400 mb-4">Run a forensic analysis to detect anomalies, duplicates, and Benford's Law violations</p>
+          <button onClick={handleRun} className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 text-white px-5 py-2.5 text-sm font-medium hover:bg-indigo-700 shadow-sm transition-all">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Run Analysis
+          </button>
+        </div>
+      )}
+
+      {/* Benford's Law */}
+      {!loading && activeSection === "benford" && benford?.items?.length > 0 && (
+        <div className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-700">Benford's Law — First Digit Distribution</h3>
+            {benford.items[0]?.details && (
+              <span className={`text-[10px] font-medium px-2 py-1 rounded-full ${
+                Math.abs((benford.items[0]?.details?.deviation_pct || 0)) > 50 ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"
+              }`}>
+                Deviation: {benford.items[0]?.details?.deviation_pct?.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          <div className="space-y-2">
+            {[1,2,3,4,5,6,7,8,9].map(d => {
+              const expected = 100 * Math.log10(1 + 1/d);
+              const obsItems = benford.items.filter((i: any) => i.details?.digit === d);
+              const observed = obsItems.length > 0 ? obsItems[0].details?.observed_pct || 0 : expected;
+              const isFlagged = obsItems.length > 0;
+              const deviation = observed - expected;
+              return (
+                <div key={d} className={`rounded-lg p-3 ${isFlagged ? "bg-red-50/50 border border-red-100" : "bg-gray-50"}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-gray-700 w-4">d={d}</span>
+                      <span className="text-[10px] text-gray-400">Benford: {expected.toFixed(1)}%</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">Observed: <strong className={isFlagged ? "text-red-600" : "text-gray-700"}>{observed.toFixed(1)}%</strong></span>
+                      {isFlagged && <span className="text-[10px] font-medium text-red-600">{deviation > 0 ? "+" : ""}{deviation.toFixed(1)}%</span>}
+                    </div>
+                  </div>
+                  <div className="h-4 rounded-full bg-gray-100 overflow-hidden relative">
+                    <div className="absolute inset-0 flex">
+                      <div className="h-full bg-blue-400/30" style={{ width: `${Math.min(expected, 100)}%` }} />
+                    </div>
+                    <div className={`h-full rounded-full transition-all ${isFlagged ? "bg-red-500" : "bg-indigo-500"}`}
+                      style={{ width: `${Math.min(observed, 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Duplicates */}
+      {!loading && activeSection === "duplicates" && duplicates.length > 0 && (
+        <div className="rounded-xl border bg-white shadow-sm">
+          <div className="px-5 py-4 border-b flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Duplicate Payment Groups</h3>
+            <span className="text-xs text-gray-400">{dupTotal} groups</span>
+          </div>
+          <div className="divide-y">
+            {duplicates.map((g: any) => (
+              <div key={g.group_id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="rounded-full bg-orange-100 text-orange-700 px-2.5 py-0.5 text-[10px] font-medium">
+                    {g.size} receipts
+                  </div>
+                  <span className="text-xs text-gray-400 font-mono">{(g.group_id || "").slice(0, 8)}</span>
+                </div>
+                <div className="space-y-2">
+                  {g.members?.map((m: any) => (
+                    <div key={m.id} className="flex items-center gap-3 text-xs bg-gray-50 rounded-lg p-2.5">
+                      <div className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
+                      <span className="font-medium text-gray-700 w-20 truncate">{m.receipt?.receipt_number || "—"}</span>
+                      <span className="text-gray-600 w-24 truncate">{m.receipt?.payer_name || "—"}</span>
+                      <span className="font-semibold text-gray-800 w-20">
+                        {m.receipt?.amount != null ? Number(m.receipt.amount).toLocaleString() : "—"}
+                      </span>
+                      <span className="text-gray-400">{m.receipt?.payment_date || "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          {dupTotal > 50 && (
+            <div className="flex items-center justify-center gap-2 p-3 border-t">
+              <button disabled={dupPage <= 1} onClick={() => loadMoreDuplicates(dupPage - 1)}
+                className="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-30">Previous</button>
+              <span className="text-xs text-gray-400">Page {dupPage} of {Math.ceil(dupTotal / 50)}</span>
+              <button disabled={dupPage >= Math.ceil(dupTotal / 50)} onClick={() => loadMoreDuplicates(dupPage + 1)}
+                className="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-30">Next</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Anomalies */}
+      {!loading && activeSection === "anomalies" && anomalies.length > 0 && (
+        <div className="rounded-xl border bg-white shadow-sm">
+          <div className="px-5 py-4 border-b flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Anomaly Scored Receipts</h3>
+            <span className="text-xs text-gray-400">{anomTotal} flags</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-gray-50 text-left text-gray-500 font-medium">
+                  <th className="px-4 py-3">Risk</th>
+                  <th className="px-4 py-3">Score</th>
+                  <th className="px-4 py-3">Receipt #</th>
+                  <th className="px-4 py-3">Payer</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Flag</th>
+                </tr>
+              </thead>
+              <tbody>
+                {anomalies.map((a: any) => {
+                  const score = a.score || 0;
+                  const riskColor = score >= 0.8 ? "bg-red-100 text-red-700" : score >= 0.5 ? "bg-orange-100 text-orange-700" : "bg-yellow-100 text-yellow-700";
+                  return (
+                    <tr key={a.id} className="border-b last:border-0 hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-2 h-2 rounded-full ${score >= 0.8 ? "bg-red-500" : score >= 0.5 ? "bg-orange-500" : "bg-yellow-500"}`} />
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${riskColor}`}>
+                            {score >= 0.8 ? "High" : score >= 0.5 ? "Medium" : "Low"}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-16 h-1.5 rounded-full bg-gray-100">
+                            <div className={`h-full rounded-full ${score >= 0.8 ? "bg-red-500" : score >= 0.5 ? "bg-orange-500" : "bg-yellow-500"}`}
+                              style={{ width: `${score * 100}%` }} />
+                          </div>
+                          <span className="text-gray-600 w-8">{(score * 100).toFixed(0)}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-800">{a.receipt?.receipt_number || "—"}</td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[120px] truncate">{a.receipt?.payer_name || "—"}</td>
+                      <td className="px-4 py-3 font-semibold text-gray-800">
+                        {a.receipt?.amount != null ? Number(a.receipt.amount).toLocaleString() : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">{a.receipt?.payment_date || "—"}</td>
+                      <td className="px-4 py-3 max-w-[200px] truncate text-gray-500" title={a.flag}>{a.flag || "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {anomTotal > 50 && (
+            <div className="flex items-center justify-center gap-2 p-3 border-t">
+              <button disabled={anomPage <= 1} onClick={() => loadMoreAnomalies(anomPage - 1)}
+                className="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-30">Previous</button>
+              <span className="text-xs text-gray-400">Page {anomPage} of {Math.ceil(anomTotal / 50)}</span>
+              <button disabled={anomPage >= Math.ceil(anomTotal / 50)} onClick={() => loadMoreAnomalies(anomPage + 1)}
+                className="text-xs px-3 py-1.5 border rounded-lg hover:bg-gray-50 disabled:opacity-30">Next</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Recent Runs */}
+      {runs.length > 0 && !isRunning && (
+        <div className="mt-6 rounded-xl border bg-white p-5 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Recent Analysis Runs</h3>
+          <div className="space-y-2">
+            {runs.map((r: any) => (
+              <div key={r.id} className="flex items-center gap-3 text-xs bg-gray-50 rounded-lg p-3">
+                <div className={`w-2 h-2 rounded-full ${r.status === "completed" ? "bg-green-500" : r.status === "failed" ? "bg-red-500" : "bg-yellow-500"}`} />
+                <span className="text-gray-500 capitalize">{r.status}</span>
+                <span className="text-gray-400">
+                  {r.results?.total_flags != null ? `${r.results.total_flags} flags · ` : ""}
+                </span>
+                <span className="text-gray-400">
+                  {r.results?.total_receipts != null ? `${r.results.total_receipts} receipts · ` : ""}
+                </span>
+                <span className="text-gray-400 ml-auto">
+                  {r.completed_at ? new Date(r.completed_at).toLocaleString() : r.started_at ? new Date(r.started_at).toLocaleString() : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {loading && !isRunning && (
+        <div className="text-center py-12 text-sm text-gray-500">
+          <Loader2 size={20} className="animate-spin inline mr-2" />
+          Loading forensic data...
         </div>
       )}
     </div>
@@ -1677,14 +2255,14 @@ const FIELD_LABELS: Record<string, string> = {
   payment_date: "Date", receipt_number: "Receipt #", description: "Description",
 };
 
-function ReconciliationTab() {
+function ReconciliationTab({ initialFilter = "" }: { initialFilter?: string }) {
   const [results, setResults] = useState<any[]>([]);
   const [proofsById, setProofsById] = useState<Record<string, any>>({});
   const [entriesById, setEntriesById] = useState<Record<string, any>>({});
   const [stats, setStats] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
-  const [classFilter, setClassFilter] = useState("");
+  const [classFilter, setClassFilter] = useState(initialFilter || "");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
