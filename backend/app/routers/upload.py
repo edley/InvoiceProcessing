@@ -1,7 +1,7 @@
 import uuid
 import os
 import threading
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Request
 from app.supabase_client import supabase
 from app.config import settings
 from app.services.receipt_processor import process_proof
@@ -15,9 +15,13 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 @router.post("/upload")
 async def upload_proof(
+    request: Request,
     file: UploadFile = File(...),
-    tenant_id: str = "default",
 ):
+    org_id = request.headers.get("X-Org-Id")
+    if not org_id:
+        raise HTTPException(status_code=400, detail="X-Org-Id header required")
+
     if file.content_type and file.content_type not in ALLOWED_MIMES:
         raise HTTPException(status_code=400, detail="Only PDF files allowed")
     content = await file.read()
@@ -25,9 +29,8 @@ async def upload_proof(
         raise HTTPException(status_code=400, detail="File too large (max 10MB)")
 
     proof_id = str(uuid.uuid4())
-    tid = tenant_id if tenant_id != "default" else str(uuid.uuid4())
     file_ext = os.path.splitext(file.filename or "proof.pdf")[1] or ".pdf"
-    storage_path = f"{tid}/{proof_id}{file_ext}"
+    storage_path = f"{org_id}/{proof_id}{file_ext}"
 
     supabase.storage.from_(settings.supabase_bucket).upload(
         path=storage_path,
@@ -37,7 +40,7 @@ async def upload_proof(
 
     supabase.table("payment_proofs").insert({
         "id": proof_id,
-        "tenant_id": tid,
+        "org_id": org_id,
         "file_path": storage_path,
         "file_name": file.filename or "proof.pdf",
         "file_size": len(content),

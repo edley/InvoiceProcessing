@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
 import { Shield, Mail, Lock, Eye, EyeOff, Loader2, CheckCircle, ArrowLeft, UserPlus, KeyRound } from "lucide-react";
 
 type Mode = "login" | "signup" | "forgot";
@@ -16,7 +15,6 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -26,9 +24,11 @@ export default function LoginPage() {
 
     try {
       if (mode === "login") {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
         if (authError) throw new Error(authError.message);
-        router.push("/");
+        if (data?.session) {
+          window.location.href = "/";
+        }
         return;
       }
 
@@ -66,7 +66,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 text-white mb-4">
             <Shield size={24} />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Automated Invoice Process <span className="text-blue-600">(AI-Tolmai)</span></h1>
+          <h1 className="text-2xl font-bold text-gray-900">Tolmai Invoice Processing Platform</h1>
           <p className="text-sm text-gray-500 mt-1">Payment Proof Processor</p>
         </div>
 

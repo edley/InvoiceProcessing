@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from app.supabase_client import supabase
+from app.services.org_service import require_org
 
 router = APIRouter()
 
 
 @router.get("/proofs")
 def list_proofs(
-    tenant_id: str = Query(None),
+    request: Request,
     status: str = None,
     document_type: str = None,
     date_from: str = None,
@@ -14,9 +15,9 @@ def list_proofs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
+    org_id = require_org(request)
     query = supabase.table("payment_proofs").select("*", count="exact")
-    if tenant_id:
-        query = query.eq("tenant_id", tenant_id)
+    query = query.eq("org_id", org_id)
     if status:
         query = query.eq("status", status)
     if document_type:
@@ -37,8 +38,9 @@ def list_proofs(
 
 
 @router.get("/proofs/{proof_id}")
-def get_proof(proof_id: str):
-    result = supabase.table("payment_proofs").select("*").eq("id", proof_id).execute()
+def get_proof(proof_id: str, request: Request):
+    org_id = require_org(request)
+    result = supabase.table("payment_proofs").select("*").eq("id", proof_id).eq("org_id", org_id).execute()
     if not result.data:
         return {"error": "not found"}
     return result.data[0]
@@ -46,6 +48,7 @@ def get_proof(proof_id: str):
 
 @router.get("/logs")
 def list_logs(
+    request: Request,
     proof_id: str = Query(None),
     date_from: str = Query(None),
     date_to: str = Query(None),
@@ -55,7 +58,9 @@ def list_logs(
     page_size: int = Query(50, ge=1, le=200),
 ):
     try:
+        org_id = require_org(request)
         query = supabase.table("processing_log").select("*", count="exact").order("created_at", desc=True)
+        query = query.eq("org_id", org_id)
         if proof_id:
             query = query.eq("proof_id", proof_id)
         if date_from:

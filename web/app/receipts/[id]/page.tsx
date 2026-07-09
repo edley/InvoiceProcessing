@@ -6,6 +6,7 @@ import { useRouter, useParams } from "next/navigation";
 import { ArrowLeft, RefreshCw, DollarSign, User, Hash, Calendar, Mail, FileText, Building2, Shield, Edit3, AlertTriangle, CheckCircle, Save } from "lucide-react";
 import Link from "next/link";
 import { formatDate } from "@/lib/utils";
+import { getApiHeaders } from "@/lib/api";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -35,7 +36,11 @@ export default function ReceiptDetailPage() {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/receipts/${id}`);
+      const { orgId, userId, accessToken } = getApiHeaders();
+      const h: Record<string, string> = { "X-User-Id": userId || "", "X-Org-Id": orgId || "" };
+      if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+
+      const res = await fetch(`${API}/api/receipts/${id}`, { headers: h });
       const d = await res.json();
       setReceipt(d);
       setForm({
@@ -55,9 +60,13 @@ export default function ReceiptDetailPage() {
   async function handleSave() {
     setSaving(true);
     try {
+      const { orgId, userId, accessToken } = getApiHeaders();
+      const h: Record<string, string> = { "Content-Type": "application/json", "X-User-Id": userId || "", "X-Org-Id": orgId || "" };
+      if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+
       const res = await fetch(`${API}/api/receipts/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: h,
         body: JSON.stringify(form),
       });
       if (!res.ok) throw new Error("Save failed");

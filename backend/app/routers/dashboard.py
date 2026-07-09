@@ -1,13 +1,16 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from app.supabase_client import supabase
+from app.services.org_service import require_org
 
 router = APIRouter()
 
 
 @router.get("/dashboard/stats")
-def dashboard_stats():
+def dashboard_stats(request: Request):
     try:
-        proofs_all = supabase.table("payment_proofs").select("status").execute()
+        org_id = require_org(request)
+
+        proofs_all = supabase.table("payment_proofs").select("status").eq("org_id", org_id).execute()
         proofs_rows = proofs_all.data if proofs_all.data else []
         proofs_total = len(proofs_rows)
         proofs_by_status: dict[str, int] = {}
@@ -16,7 +19,7 @@ def dashboard_stats():
             proofs_by_status[s] = proofs_by_status.get(s, 0) + 1
         proofs_completed = proofs_by_status.get("completed", 0) + proofs_by_status.get("ready_to_process", 0)
 
-        receipts_all = supabase.table("proof_of_payment_receipt").select("status").execute()
+        receipts_all = supabase.table("proof_of_payment_receipt").select("status").eq("org_id", org_id).execute()
         receipts_rows = receipts_all.data if receipts_all.data else []
         receipts_total = len(receipts_rows)
         receipts_by_status: dict[str, int] = {}
@@ -25,7 +28,7 @@ def dashboard_stats():
             receipts_by_status[s] = receipts_by_status.get(s, 0) + 1
         receipts_reviewed = receipts_by_status.get("reviewed", 0) + receipts_by_status.get("synced", 0) + receipts_by_status.get("completed", 0)
 
-        rec_all = supabase.table("reconciliation_results").select("classification").execute()
+        rec_all = supabase.table("reconciliation_results").select("classification").eq("org_id", org_id).execute()
         rec_rows = rec_all.data if rec_all.data else []
         rec_total = len(rec_rows)
         rec_by_class: dict[str, int] = {}
@@ -34,7 +37,7 @@ def dashboard_stats():
             rec_by_class[c] = rec_by_class.get(c, 0) + 1
         fraud_count = rec_by_class.get("potential_fraud", 0) + rec_by_class.get("forensic_required", 0) + rec_by_class.get("fraud_detected", 0)
 
-        audit_all = supabase.table("receipt_field_audit").select("receipt_id", count="exact").execute()
+        audit_all = supabase.table("receipt_field_audit").select("receipt_id", count="exact").eq("org_id", org_id).execute()
         audit_receipt_ids = set()
         for r in (audit_all.data or []):
             rid = r.get("receipt_id")

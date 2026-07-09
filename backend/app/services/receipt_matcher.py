@@ -118,7 +118,7 @@ def _recon_log(proof_id: str | None, status: str, message: str):
         pass
 
 
-def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
+def run_reconciliation(date_from: str = None, date_to: str = None, org_id: str = None) -> dict:
     from app.reconciliation_progress import start, tick, complete, fail
 
     start(0)
@@ -133,11 +133,15 @@ def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
     tick(0, "Counting proofs and accounting entries...")
 
     count_q = supabase.table("proof_of_payment_receipt").select("id", count="exact").in_("status", ["extracted", "reviewed", "synced", "completed"])
+    if org_id:
+        count_q = count_q.eq("org_id", org_id)
     count_q = _apply_date_range(count_q)
     proof_count_raw = count_q.execute()
     proof_count = proof_count_raw.count if hasattr(proof_count_raw, "count") else 0
 
     entry_count_q = supabase.table("accounting_receipts").select("id", count="exact").eq("status", "posted")
+    if org_id:
+        entry_count_q = entry_count_q.eq("org_id", org_id)
     entry_count_q = _apply_date_range(entry_count_q)
     entry_count_raw = entry_count_q.execute()
     entry_count = entry_count_raw.count if hasattr(entry_count_raw, "count") else 0
@@ -146,10 +150,14 @@ def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
     start(total)
 
     proof_q = supabase.table("proof_of_payment_receipt").select("*").in_("status", ["extracted", "reviewed", "synced", "completed"])
+    if org_id:
+        proof_q = proof_q.eq("org_id", org_id)
     proof_q = _apply_date_range(proof_q)
     proofs = proof_q.execute()
 
     entry_q = supabase.table("accounting_receipts").select("*").eq("status", "posted")
+    if org_id:
+        entry_q = entry_q.eq("org_id", org_id)
     entry_q = _apply_date_range(entry_q)
     entries = entry_q.execute()
 
@@ -196,6 +204,7 @@ def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
                     pass
 
             result = {
+                "org_id": org_id,
                 "proof_receipt_id": proof["id"],
                 "accounting_entry_id": entry["id"],
                 "match_type": "auto",
@@ -217,6 +226,7 @@ def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
             _recon_log(proof.get("proof_id"), "success",
                        f"No match found for receipt {proof['id'][:8]} ({proof.get('receipt_number') or proof.get('payer_name', '')})")
             result = {
+                "org_id": org_id,
                 "proof_receipt_id": proof["id"],
                 "accounting_entry_id": None,
                 "match_type": "unmatched_proof",
@@ -234,6 +244,7 @@ def run_reconciliation(date_from: str = None, date_to: str = None) -> dict:
         if entry["id"] not in used_entry_ids:
             unmatched_entries += 1
             result = {
+                "org_id": org_id,
                 "proof_receipt_id": None,
                 "accounting_entry_id": entry["id"],
                 "match_type": "unmatched_entry",

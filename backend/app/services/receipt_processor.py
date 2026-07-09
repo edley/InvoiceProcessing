@@ -122,9 +122,10 @@ def regex_extract(text: str) -> dict:
 
 # ---- Main processor ---- #
 
-def _log(proof_id: str, stage: str, status: str, message: str):
+def _log(proof_id: str, stage: str, status: str, message: str, org_id: str | None = None):
     try:
         supabase.table("processing_log").insert({
+            "org_id": org_id,
             "proof_id": proof_id,
             "stage": stage,
             "status": status,
@@ -140,12 +141,13 @@ def process_proof(proof_id: str) -> dict:
         raise ValueError(f"Proof {proof_id} not found")
 
     proof = proof_result.data[0]
+    p_org_id = proof.get("org_id")
     supabase.table("payment_proofs").update({"status": "processing"}).eq("id", proof_id).execute()
 
     try:
         pdf_bytes = supabase.storage.from_(settings.supabase_bucket).download(proof["file_path"])
         text = extract_text_from_pdf(pdf_bytes)
-        _log(proof_id, "ocr", "success", f"Extracted {len(text)} chars; preview: {text[:300]}")
+        _log(proof_id, "ocr", "success", f"Extracted {len(text)} chars; preview: {text[:300]}", org_id=p_org_id)
 
         classification = classify_document(text)
         doc_type = classification["document_type"]
@@ -155,7 +157,8 @@ def process_proof(proof_id: str) -> dict:
             "document_type_confidence": doc_conf,
         }).eq("id", proof_id).execute()
         _log(proof_id, "classify", "success",
-             json.dumps({"document_type": doc_type, "confidence": doc_conf, "reasoning": classification.get("reasoning", "")}))
+             json.dumps({"document_type": doc_type, "confidence": doc_conf, "reasoning": classification.get("reasoning", "")}),
+             org_id=p_org_id)
 
         if not is_receipt_type(doc_type):
             supabase.table("payment_proofs").update({
@@ -174,7 +177,8 @@ def process_proof(proof_id: str) -> dict:
         if has_llm:
             llm_result, llm_raw_response = extract_with_llm(text)
             _log(proof_id, "llm_primary", "success" if llm_result else "failure",
-                 json.dumps({"raw_response": llm_raw_response, "parsed": llm_result}, default=str))
+                 json.dumps({"raw_response": llm_raw_response, "parsed": llm_result}, default=str),
+                 org_id=p_org_id)
 
         if llm_result and llm_result.get("confidence", 0) >= settings.llm_confidence_threshold_auto:
             extracted = llm_result
@@ -189,26 +193,29 @@ def process_proof(proof_id: str) -> dict:
         elif has_llm:
             fallback, fallback_raw = llm_fallback_extract(text)
             _log(proof_id, "llm_fallback", "success" if fallback else "failure",
-                 json.dumps({"raw_response": fallback_raw, "parsed": fallback}, default=str))
+                 json.dumps({"raw_response": fallback_raw, "parsed": fallback}, default=str),
+                 org_id=p_org_id)
             if fallback:
                 extracted = {**fallback, "confidence": fallback.get("confidence", 0.3)}
             else:
                 extracted = regex_extract(text)
-                _log(proof_id, "regex", "success", json.dumps(extracted, default=str))
+                _log(proof_id, "regex", "success", json.dumps(extracted, default=str), org_id=p_org_id)
             source = "llm_fallback"
             proof_status = "review_needed"
             receipt_status = "review_needed"
         else:
             extracted = regex_extract(text)
-            _log(proof_id, "regex", "success", json.dumps(extracted, default=str))
+            _log(proof_id, "regex", "success", json.dumps(extracted, default=str), org_id=p_org_id)
             source = "regex"
             proof_status = "review_needed"
             receipt_status = "review_needed"
 
         _log(proof_id, "routing", "success",
-             f"source={source} proof_status={proof_status} receipt_status={receipt_status} confidence={extracted.get('confidence')}")
+             f"source={source} proof_status={proof_status} receipt_status={receipt_status} confidence={extracted.get('confidence')}",
+             org_id=p_org_id)
 
         receipt = {
+            "org_id": proof.get("org_id"),
             "proof_id": proof_id,
             "receipt_number": extracted.get("receipt_number"),
             "amount": extracted.get("amount"),

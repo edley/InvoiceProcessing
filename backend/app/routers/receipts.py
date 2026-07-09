@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional
 from app.supabase_client import supabase
+from app.services.org_service import require_org, require_role
 from datetime import datetime, timezone
 
 router = APIRouter()
@@ -28,13 +29,17 @@ class ReceiptUpdate(BaseModel):
 
 @router.get("/receipts")
 def list_receipts(
+    request: Request,
     status: str = None,
     date_from: str = None,
     date_to: str = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    query = supabase.table("proof_of_payment_receipt").select("*, payment_proofs(file_name, status, file_path)", count="exact")
+    org_id = require_org(request)
+    query = supabase.table("proof_of_payment_receipt") \
+        .select("*, payment_proofs(file_name, status, file_path)", count="exact")
+    query = query.eq("org_id", org_id)
     if status:
         query = query.eq("status", status)
     if date_from:
@@ -53,16 +58,24 @@ def list_receipts(
 
 
 @router.get("/receipts/{receipt_id}")
-def get_receipt(receipt_id: str):
-    result = supabase.table("proof_of_payment_receipt").select("*, payment_proofs(file_name, status, file_path)").eq("id", receipt_id).execute()
+def get_receipt(receipt_id: str, request: Request):
+    org_id = require_org(request)
+    result = supabase.table("proof_of_payment_receipt") \
+        .select("*, payment_proofs(file_name, status, file_path)") \
+        .eq("id", receipt_id).eq("org_id", org_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="Receipt not found")
     return result.data[0]
 
 
 @router.patch("/receipts/{receipt_id}")
-def update_receipt(receipt_id: str, body: ReceiptUpdate):
-    existing = supabase.table("proof_of_payment_receipt").select("*").eq("id", receipt_id).execute()
+def update_receipt(receipt_id: str, body: ReceiptUpdate, request: Request):
+    org_id = require_org(request)
+    user_id = request.headers.get("X-User-Id")
+    if user_id:
+        require_role(org_id, user_id, "manager")
+
+    existing = supabase.table("proof_of_payment_receipt").select("*").eq("id", receipt_id).eq("org_id", org_id).execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="Receipt not found")
 
@@ -71,13 +84,13 @@ def update_receipt(receipt_id: str, body: ReceiptUpdate):
     if update_data:
         supabase.table("proof_of_payment_receipt").update(update_data).eq("id", receipt_id).execute()
 
-        # Log field-level audit trail
         changed_by = body.changed_by
         audit_records = []
         for field, new_val in update_data.items():
             old_val = old.get(field)
             if str(old_val) != str(new_val):
                 audit_records.append({
+                    "org_id": org_id,
                     "receipt_id": receipt_id,
                     "field_name": field,
                     "old_value": str(old_val) if old_val is not None else None,
@@ -88,22 +101,25 @@ def update_receipt(receipt_id: str, body: ReceiptUpdate):
         if audit_records:
             supabase.table("receipt_field_audit").insert(audit_records).execute()
 
-        # When receipt is reviewed, also update proof status to ready_to_process
         new_status = update_data.get("status")
         if new_status == "reviewed":
             supabase.table("payment_proofs").update({
                 "status": "ready_to_process",
             }).eq("id", old["proof_id"]).execute()
 
-    result = supabase.table("proof_of_payment_receipt").select("*, payment_proofs(file_name, status, file_path)").eq("id", receipt_id).execute()
+    result = supabase.table("proof_of_payment_receipt") \
+        .select("*, payment_proofs(file_name, status, file_path)") \
+        .eq("id", receipt_id).execute()
     return result.data[0]
 
 
 @router.get("/receipts/{receipt_id}/audit")
-def get_receipt_audit(receipt_id: str):
+def get_receipt_audit(receipt_id: str, request: Request):
+    org_id = require_org(request)
     result = supabase.table("receipt_field_audit") \
         .select("*") \
         .eq("receipt_id", receipt_id) \
+        .eq("org_id", org_id) \
         .order("changed_at", desc=True) \
         .execute()
     return {"items": result.data}

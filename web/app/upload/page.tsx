@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { uploadProof } from "@/lib/api";
+import { uploadProof, getApiHeaders } from "@/lib/api";
 import { Upload, CheckCircle, AlertCircle, ArrowLeft, Shield, AlertTriangle, Receipt, DollarSign, User, Building2, Hash, Loader2 } from "lucide-react";
 import Link from "next/link";
 
@@ -52,6 +52,15 @@ export default function UploadPage() {
     else setError("Only PDF files are accepted");
   }, []);
 
+  function apiHeaders(): Record<string, string> {
+    const { orgId, userId, accessToken } = getApiHeaders();
+    const h: Record<string, string> = {};
+    if (orgId) h["X-Org-Id"] = orgId;
+    if (userId) h["X-User-Id"] = userId;
+    if (accessToken) h["Authorization"] = `Bearer ${accessToken}`;
+    return h;
+  }
+
   function startPolling(proofId: string) {
     setCurrentStep("uploaded");
     setProgress(10);
@@ -59,8 +68,8 @@ export default function UploadPage() {
     pollRef.current = setInterval(async () => {
       try {
         const [logsRes, proofRes] = await Promise.all([
-          fetch(`${API}/api/logs?proof_id=${proofId}&page=1&page_size=5`),
-          fetch(`${API}/api/proofs/${proofId}`),
+          fetch(`${API}/api/logs?proof_id=${proofId}&page=1&page_size=5`, { headers: apiHeaders() }),
+          fetch(`${API}/api/proofs/${proofId}`, { headers: apiHeaders() }),
         ]);
         if (!logsRes.ok || !proofRes.ok) return;
         const logs = (await logsRes.json()).items || [];
@@ -81,7 +90,7 @@ export default function UploadPage() {
           setProgress(100);
           setCurrentStep("done");
 
-          const receiptRes = await fetch(`${API}/api/receipts?page=1&page_size=50`);
+          const receiptRes = await fetch(`${API}/api/receipts?page=1&page_size=50`, { headers: apiHeaders() });
           const receipts = (await receiptRes.json()).items || [];
           const match = receipts.find((r: any) => r.proof_id === proofId);
 
@@ -103,7 +112,7 @@ export default function UploadPage() {
     setError("");
     setProgress(5);
     try {
-      const res = await uploadProof(file, user.id);
+      const res = await uploadProof(file);
       startPolling(res.id);
     } catch (err: any) {
       setError(err.message);

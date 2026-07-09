@@ -1,22 +1,34 @@
 import uuid
+import json
 import math
+import re
 import threading
-from datetime import datetime
+import httpx
+from datetime import datetime, timezone
 from collections import Counter
 from difflib import SequenceMatcher
 from statistics import median, stdev
+from scipy.stats import chisquare
+from openai import OpenAI
 from app.supabase_client import supabase
+from app.config import settings
+from app.settings_db import get_all_settings
 
 BENFORD_EXPECTED = {d: round(math.log10(1 + 1 / d), 4) for d in range(1, 10)}
 
-_progress = {
-    "status": "idle",
-    "progress": 0,
-    "total_steps": 3,
-    "current_step": "",
-    "message": "",
-}
+def _make_progress():
+    return {
+        "status": "idle",
+        "progress": 0,
+        "total_steps": 4,
+        "current_step": "",
+        "message": "",
+    }
+
+_progress = _make_progress()
 _lock = threading.Lock()
+_cancelled = False
+MAX_RUN_SECONDS = 300
 
 
 def get_progress():
@@ -34,6 +46,30 @@ def _set_progress(pct: int, step: str, msg: str = ""):
 def _set_status(status: str):
     with _lock:
         _progress["status"] = status
+
+
+def cancel_analysis():
+    global _cancelled
+    with _lock:
+        _cancelled = True
+        _progress["status"] = "cancelled"
+        _progress["current_step"] = "Cancelled"
+        _progress["message"] = "Analysis cancelled by user"
+
+
+def _check_cancelled(started_at: datetime | None = None) -> bool:
+    with _lock:
+        if _cancelled:
+            return True
+    if started_at:
+        elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
+        if elapsed > MAX_RUN_SECONDS:
+            with _lock:
+                _progress["status"] = "failed"
+                _progress["current_step"] = "Timed out"
+                _progress["message"] = f"Analysis exceeded {MAX_RUN_SECONDS}s timeout"
+            return True
+    return False
 
 
 def _log(proof_id: str | None, stage: str, status: str, message: str):
@@ -58,9 +94,10 @@ def _clear_flags():
 
 
 def _insert_flag(receipt_id: str, analysis_type: str, score: float, flag: str,
-                 details: dict | None = None, dup_group: str | None = None):
+                 org_id: str | None = None, details: dict | None = None, dup_group: str | None = None):
     try:
         supabase.table("forensic_flags").insert({
+            "org_id": org_id,
             "receipt_id": receipt_id,
             "analysis_type": analysis_type,
             "score": round(score, 4),
@@ -72,8 +109,11 @@ def _insert_flag(receipt_id: str, analysis_type: str, score: float, flag: str,
         print(f"[Forensic] Insert flag error: {e}")
 
 
-def _get_all_receipts() -> list[dict]:
-    result = supabase.table("proof_of_payment_receipt").select("*").execute()
+def _get_all_receipts(org_id: str | None = None) -> list[dict]:
+    q = supabase.table("proof_of_payment_receipt").select("*")
+    if org_id:
+        q = q.eq("org_id", org_id)
+    result = q.execute()
     return result.data or []
 
 
@@ -84,11 +124,159 @@ def _first_digit(n) -> int:
         return 0
 
 
-def run_forensic_analysis():
-    _set_status("running")
-    _set_progress(0, "Starting forensic analysis...", "Fetching receipt data")
+FORENSIC_LLM_PROMPT = """You are a senior forensic accounting investigator. Given a list of payment receipts that have already been flagged by statistical checks, analyze them for suspicious patterns.
 
-    receipts = _get_all_receipts()
+For each receipt, consider:
+1. **Payer/payee patterns** — does the same vendor appear under slightly different names?
+2. **Amount anomalies** — round numbers just below a threshold, or amounts that don't match the description
+3. **Temporal patterns** — multiple payments to the same entity on the same day
+4. **Description mismatches** — descriptions that seem inconsistent with the payer/vendor
+5. **Contextual fraud indicators** — anything a human investigator would flag
+
+Return a JSON object with:
+{
+  "receipts": [
+    {
+      "receipt_id": "<the receipt id from the input>",
+      "flag": "short flag name",
+      "analysis_type": "narrative" | "pattern" | "contextual",
+      "score": 0.0-1.0,
+      "explanation": "one sentence explanation"
+    }
+  ]
+}
+
+Be conservative — only flag genuine concerns. Return ONLY valid JSON, no markdown."""
+
+
+def _get_llm_config():
+    db = get_all_settings()
+    provider = db.get("llm_provider") or settings.llm_provider
+    model = db.get("llm_model") or settings.llm_model
+    if provider == "nvidia":
+        return {
+            "provider": "nvidia",
+            "api_key": db.get("nvidia_api_key") or settings.nvidia_api_key,
+            "base_url": db.get("nvidia_base_url") or settings.nvidia_base_url,
+            "model": db.get("nvidia_model") or settings.nvidia_model,
+        }
+    return {
+        "provider": "openai",
+        "api_key": db.get("openai_api_key") or settings.openai_api_key,
+        "model": model,
+    }
+
+
+def _get_llm_client(cfg: dict):
+    http_client = httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
+    if cfg["provider"] == "nvidia":
+        return OpenAI(api_key=cfg["api_key"], base_url=cfg["base_url"], http_client=http_client)
+    return OpenAI(api_key=cfg["api_key"], http_client=http_client)
+
+
+def _extract_json(text: str) -> dict | None:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+        m = re.search(r'\{[\s\S]*\}', text)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def _run_llm_forensic(receipts: list[dict], org_id: str | None = None) -> dict:
+    flagged = 0
+    total = len(receipts)
+    if total == 0:
+        return {"total_flags": 0, "message": "No receipts for analysis"}
+
+    cfg = _get_llm_config()
+    if not cfg.get("api_key"):
+        _set_progress(0, "LLM Analysis — skipped", "No LLM API key configured")
+        return {"total_flags": 0, "message": "LLM not configured"}
+
+    client = _get_llm_client(cfg)
+
+    BATCH_SIZE = 10
+    batches = [receipts[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+
+    for bi, batch in enumerate(batches):
+        if _check_cancelled():
+            return {"total_flags": flagged, "batches": bi, "cancelled": True}
+        batch_input = []
+        for r in batch:
+            batch_input.append({
+                "id": r.get("id"),
+                "receipt_number": r.get("receipt_number"),
+                "amount": r.get("amount"),
+                "currency": r.get("currency"),
+                "payer_name": r.get("payer_name"),
+                "bank_issuer": r.get("bank_issuer"),
+                "description": r.get("description"),
+                "payment_date": r.get("payment_date"),
+                "payee": r.get("payee"),
+            })
+
+        pct = int(5 + 95 * (bi + 1) / len(batches))
+        _set_progress(pct, "LLM Analysis", f"Calling LLM — batch {bi + 1}/{len(batches)} ({len(batch)} receipts)")
+
+        try:
+            kwargs = {
+                "model": cfg["model"],
+                "messages": [
+                    {"role": "system", "content": FORENSIC_LLM_PROMPT},
+                    {"role": "user", "content": f"Analyze these payment receipts for suspicious patterns:\n\n{json.dumps(batch_input, indent=2)}"},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 1000,
+            }
+            if cfg.get("provider") != "nvidia":
+                kwargs["response_format"] = {"type": "json_object"}
+            response = client.chat.completions.create(**kwargs)
+            raw = response.choices[0].message.content
+            if not raw:
+                continue
+
+            result = _extract_json(raw)
+            if not result:
+                continue
+            for item in result.get("receipts", []):
+                _insert_flag(
+                    receipt_id=item.get("receipt_id"),
+                    analysis_type=item.get("analysis_type", "narrative"),
+                    score=item.get("score", 0.5),
+                    flag=item.get("flag", "LLM flagged"),
+                    org_id=org_id,
+                    details={
+                        "explanation": item.get("explanation"),
+                        "source": "llm_analysis",
+                    },
+                )
+                flagged += 1
+        except Exception:
+            pass
+
+    return {"total_flags": flagged, "batches": len(batches)}
+
+
+def run_forensic_analysis(org_id: str | None = None):
+    global _cancelled
+    with _lock:
+        _cancelled = False
+    _set_status("running")
+    _set_progress(0, "Fetching receipts", "Loading receipt data from database")
+    started_at = datetime.now(timezone.utc)
+
+    receipts = _get_all_receipts(org_id)
     if not receipts:
         _set_status("completed")
         _set_progress(100, "Complete", "No receipts to analyze")
@@ -99,60 +287,89 @@ def run_forensic_analysis():
     _log(receipts[0].get("proof_id") or receipts[0]["id"], "forensic_analysis", "success",
          f"Forensic analysis started — {total_receipts} receipts")
 
-    _set_progress(5, "Cleared previous flags", f"Analyzing {total_receipts} receipts")
+    _set_progress(5, "Fetching receipts", f"Found {total_receipts} receipts to analyze")
 
-    STEP_WEIGHT = 30
-
-    benford = _run_benford(receipts)
-    _set_progress(5 + STEP_WEIGHT, "Benford's Law complete",
-                  f"Benford: chi-square={benford.get('chi_square', 0):.2f}, p-value={benford.get('p_value', 0):.4f}")
-
-    duplicates = _run_duplicate_detection(receipts)
-    _set_progress(5 + STEP_WEIGHT * 2, "Duplicate detection complete",
-                  f"Duplicates: {duplicates.get('total_groups', 0)} groups, {duplicates.get('total_flags', 0)} flags")
-
-    anomalies = _run_anomaly_scoring(receipts)
-    _set_progress(5 + STEP_WEIGHT * 3, "Anomaly scoring complete",
-                  f"Anomalies: {anomalies.get('total_flags', 0)} flags")
-
-    total_flags = benford.get("total_flags", 0) + duplicates.get("total_flags", 0) + anomalies.get("total_flags", 0)
-
-    _log(receipts[0].get("proof_id") or receipts[0]["id"], "forensic_analysis", "success",
-         f"Forensic analysis complete — {total_flags} total flags (Benford: {benford.get('total_flags', 0)}, "
-         f"Duplicates: {duplicates.get('total_flags', 0)}, Anomalies: {anomalies.get('total_flags', 0)})")
-
-    result = {
-        "status": "completed",
-        "total_receipts": total_receipts,
-        "total_flags": total_flags,
-        "benford": benford,
-        "duplicates": duplicates,
-        "anomalies": anomalies,
-    }
+    STEP_WEIGHT = 22
+    benford = {}
+    duplicates = {}
+    anomalies = {}
+    llm = {"total_flags": 0, "batches": 0}
 
     try:
-        run_record = supabase.table("forensic_runs").insert({
+        if _check_cancelled(started_at):
+            return {"status": "cancelled", "total_receipts": total_receipts, "total_flags": 0}
+
+        _set_progress(5, "Running Benford's Law...", "Computing first-digit frequency distribution")
+        benford = _run_benford(receipts)
+        _set_progress(5 + STEP_WEIGHT, "Benford's Law complete",
+                      f"Benford: chi-square={benford.get('chi_square', 0):.2f}, p-value={benford.get('p_value', 0):.4f}")
+
+        if _check_cancelled(started_at):
+            return {"status": "cancelled", "total_receipts": total_receipts, "total_flags": 0}
+
+        _set_progress(5 + STEP_WEIGHT, "Running duplicate detection...", "Comparing receipts for near-duplicate payments")
+        duplicates = _run_duplicate_detection(receipts)
+        _set_progress(5 + STEP_WEIGHT * 2, "Duplicate detection complete",
+                      f"Duplicates: {duplicates.get('total_groups', 0)} groups, {duplicates.get('total_flags', 0)} flags")
+
+        if _check_cancelled(started_at):
+            return {"status": "cancelled", "total_receipts": total_receipts, "total_flags": 0}
+
+        _set_progress(5 + STEP_WEIGHT * 2, "Running anomaly scoring...", "Scoring receipts for statistical outliers")
+        anomalies = _run_anomaly_scoring(receipts)
+        _set_progress(5 + STEP_WEIGHT * 3, "Anomaly scoring complete",
+                      f"Anomalies: {anomalies.get('total_flags', 0)} flags")
+
+        if _check_cancelled(started_at):
+            return {"status": "cancelled", "total_receipts": total_receipts, "total_flags": 0}
+
+        _set_progress(5 + STEP_WEIGHT * 3, "LLM Analysis - Connecting", "Establishing connection to AI provider...")
+        llm = _run_llm_forensic(receipts, org_id)
+        _set_progress(5 + STEP_WEIGHT * 4, "LLM analysis complete",
+                      f"LLM: {llm.get('total_flags', 0)} flags across {llm.get('batches', 0)} batches")
+
+        total_flags = benford.get("total_flags", 0) + duplicates.get("total_flags", 0) + anomalies.get("total_flags", 0) + llm.get("total_flags", 0)
+
+        _log(receipts[0].get("proof_id") or receipts[0]["id"], "forensic_analysis", "success",
+             f"Forensic analysis complete — {total_flags} total flags (Benford: {benford.get('total_flags', 0)}, "
+             f"Duplicates: {duplicates.get('total_flags', 0)}, Anomalies: {anomalies.get('total_flags', 0)}, LLM: {llm.get('total_flags', 0)})")
+
+        result = {
             "status": "completed",
-            "progress": 100,
-            "total_steps": 3,
-            "current_step": "Complete",
-            "results": result,
-            "completed_at": datetime.utcnow().isoformat(),
-        }).execute()
-        run_id = run_record.data[0]["id"] if run_record.data else None
-        result["run_id"] = run_id
-    except Exception:
-        pass
+            "total_receipts": total_receipts,
+            "total_flags": total_flags,
+            "benford": benford,
+            "duplicates": duplicates,
+            "anomalies": anomalies,
+            "llm_analysis": llm,
+        }
 
-    _set_status("completed")
-    _set_progress(100, "Complete", f"Analysis finished — {total_flags} flags across {total_receipts} receipts")
+        try:
+            run_record = supabase.table("forensic_runs").insert({
+                "status": "completed",
+                "progress": 100,
+                "total_steps": 4,
+                "current_step": "Complete",
+                "results": result,
+                "org_id": org_id,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+            run_id = run_record.data[0]["id"] if run_record.data else None
+            result["run_id"] = run_id
+        except Exception:
+            pass
 
-    return result
+        _set_status("completed")
+        _set_progress(100, "Complete", f"Analysis finished — {total_flags} flags across {total_receipts} receipts")
+
+        return result
+    except Exception as e:
+        _set_status("failed")
+        _set_progress(0, "Failed", f"Error: {str(e)[:200]}")
+        return {"status": "failed", "error": str(e)}
 
 
 def _run_benford(receipts: list[dict]) -> dict:
-    from scipy.stats import chisquare
-
     amounts = []
     valid_receipts = 0
     for r in receipts:
@@ -196,6 +413,7 @@ def _run_benford(receipts: list[dict]) -> dict:
                         analysis_type="benford",
                         score=abs(deviation) / 100,
                         flag=f"Digit {d} frequency deviation {deviation:+.1f}%",
+                        org_id=r.get("org_id"),
                         details={
                             "digit": d,
                             "expected_pct": round(expected_freq[d] * 100, 2),
@@ -288,6 +506,7 @@ def _run_duplicate_detection(receipts: list[dict]) -> dict:
                     analysis_type="duplicate",
                     score=score,
                     flag=f"Potential duplicate (group of {len(group)})",
+                    org_id=m.get("org_id"),
                     details=details_data,
                     dup_group=group_id,
                 )
@@ -367,6 +586,7 @@ def _run_anomaly_scoring(receipts: list[dict]) -> dict:
                 analysis_type="anomaly",
                 score=score,
                 flag=reasons[0][:100],
+                org_id=r.get("org_id"),
                 details={
                     "reasons": reasons,
                     "z_score": round(z, 4),

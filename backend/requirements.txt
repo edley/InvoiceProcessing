@@ -8,3 +8,4 @@ pydantic-settings>=2.3.0,<3
 pdfplumber>=0.11.0,<1
 openai>=1.0.0,<2
 scipy>=1.13.0,<2
+pyjwt>=2.8.0,<3

@@ -9,7 +9,7 @@ class PaymentProof(Base):
     __tablename__ = "payment_proofs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    org_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     file_path = Column(Text, nullable=False)
     file_name = Column(Text, nullable=False)
     file_size = Column(BigInteger, nullable=True)

@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import settings
+from app.org_middleware import OrgMiddleware
+from app.auth_middleware import JWTAuthMiddleware
 
 app = FastAPI(title="WhatsApp Payment Processor", version="0.1.0")
 
@@ -32,6 +34,8 @@ class CORSHeaderMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(CORSHeaderMiddleware)
+app.add_middleware(JWTAuthMiddleware)
+app.add_middleware(OrgMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +49,16 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    from fastapi import HTTPException as FastAPIHTTPException
+    if isinstance(exc, FastAPIHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers={
+                "Access-Control-Allow-Origin": request.headers.get("origin", "*"),
+                "Access-Control-Allow-Credentials": "true",
+            },
+        )
     return JSONResponse(
         status_code=500,
         content={"detail": str(exc)},
@@ -55,7 +69,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation, settings, dashboard, forensic
+from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation
+from app.routers import dashboard, forensic, orgs, platform
+import app.routers.settings as settings_router
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(proofs.router, prefix="/api", tags=["proofs"])
@@ -64,9 +80,11 @@ app.include_router(receipts.router, prefix="/api", tags=["receipts"])
 app.include_router(whatsapp.router, prefix="/api", tags=["whatsapp"])
 app.include_router(accounting.router, prefix="/api", tags=["accounting"])
 app.include_router(reconciliation.router, prefix="/api", tags=["reconciliation"])
-app.include_router(settings.router, prefix="/api", tags=["settings"])
+app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(dashboard.router, prefix="/api", tags=["dashboard"])
 app.include_router(forensic.router, prefix="/api", tags=["forensic"])
+app.include_router(orgs.router, prefix="/api", tags=["orgs"])
+app.include_router(platform.router, prefix="/api", tags=["platform"])
 
 
 @app.get("/api/whatsapp/test")
@@ -79,3 +97,4 @@ def test_whatsapp():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+

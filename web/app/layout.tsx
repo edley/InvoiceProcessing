@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { OrgProvider } from "@/lib/org-context";
 
 export const metadata: Metadata = {
   title: "Payment Proofs",
@@ -9,7 +10,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <OrgProvider>{children}</OrgProvider>
+      </body>
     </html>
   );
 }
