@@ -1,14 +1,15 @@
 import jwt
 import logging
 from urllib.parse import urlparse
-from fastapi import Request, HTTPException
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import settings
 
 logger = logging.getLogger("auth_middleware")
 
 _jwks_client = None
-SKIP_PATHS = {"/health", "/api/whatsapp/webhook"}
+SKIP_PATHS = {"/", "/health", "/api/whatsapp/webhook"}
 
 
 def _get_jwks_client():
@@ -32,7 +33,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         auth = request.headers.get("Authorization", "")
 
         if not auth.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing authorization token")
+            return JSONResponse(status_code=401, content={"detail": "Missing authorization token"})
 
         token = auth[7:]
         try:
@@ -51,13 +52,13 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.state.verified_user_id = payload.get("sub")
             request.state.auth_verified = True
         except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
+            return JSONResponse(status_code=401, content={"detail": "Token expired"})
         except jwt.PyJWKClientError as e:
             logger.warning("JWKS fetch failed: %s", e)
-            raise HTTPException(status_code=401, detail="Auth service unavailable")
+            return JSONResponse(status_code=401, content={"detail": "Auth service unavailable"})
         except jwt.InvalidTokenError as e:
             logger.warning("JWT verification failed: %s", e)
-            raise HTTPException(status_code=401, detail="Invalid token")
+            return JSONResponse(status_code=401, content={"detail": "Invalid token"})
 
         response = await call_next(request)
         return response
