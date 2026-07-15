@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import Any, Optional
+from datetime import datetime
 from app.supabase_client import supabase
 from app.services.org_service import (
     require_platform_admin, is_platform_admin,
@@ -12,6 +13,75 @@ from app.services.org_service import (
 )
 
 router = APIRouter()
+
+
+def _get_user_id(request: Request) -> str:
+    uid = getattr(request.state, "verified_user_id", None) or request.headers.get("X-User-Id")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return uid
+
+
+@router.get("/platform/summary")
+def platform_summary(request: Request):
+    user_id = _get_user_id(request)
+    require_platform_admin(user_id)
+
+    orgs = supabase.table("organizations").select("id, name, slug, status, created_at").order("created_at", desc=True).execute()
+    orgs_data = orgs.data or []
+
+    users = list_all_users()
+
+    admins = [u for u in users if u.get("is_platform_admin")]
+
+    recent_logs = query_audit_log(limit=20, offset=0)
+
+    org_member_counts = {}
+    for org in orgs_data:
+        members = supabase.table("organization_members").select("user_id").eq("org_id", org["id"]).execute()
+        org_member_counts[org["id"]] = len(members.data or [])
+
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_activity = supabase.table("audit_log").select("id").gte("created_at", today_start).execute()
+    today_count = len(today_activity.data or [])
+
+    return {
+        "total_companies": len(orgs_data),
+        "total_users": len(users),
+        "platform_admins": len(admins),
+        "activity_today": today_count,
+        "companies": [
+            {
+                "id": o["id"],
+                "name": o.get("name", ""),
+                "slug": o.get("slug"),
+                "status": o.get("status", "active"),
+                "member_count": org_member_counts.get(o["id"], 0),
+                "created_at": o.get("created_at"),
+            }
+            for o in orgs_data
+        ],
+        "users": [
+            {
+                "user_id": u["user_id"],
+                "display_name": u.get("display_name", ""),
+                "email": u.get("email", ""),
+                "is_platform_admin": u.get("is_platform_admin", False),
+                "orgs": u.get("orgs", []),
+            }
+            for u in users
+        ],
+        "recent_activity": [
+            {
+                "action": e.get("action"),
+                "user_id": e.get("user_id"),
+                "org_id": e.get("org_id"),
+                "details": e.get("details"),
+                "created_at": e.get("created_at"),
+            }
+            for e in recent_logs
+        ],
+    }
 
 
 @router.get("/platform/status")
@@ -65,6 +135,24 @@ def platform_list_members(org_id: str, request: Request):
         raise HTTPException(status_code=401, detail="X-User-Id header required")
     require_platform_admin(user_id)
     return {"items": get_org_members(org_id)}
+
+
+class ToggleNotificationsBody(BaseModel):
+    enabled: bool
+
+
+@router.put("/platform/users/{target_user_id}/notifications")
+def toggle_user_notifications(target_user_id: str, body: ToggleNotificationsBody, request: Request):
+    user_id = _get_user_id(request)
+    require_platform_admin(user_id)
+
+    supabase.table("user_profiles").update({
+        "notifications_enabled": body.enabled
+    }).eq("id", target_user_id).execute()
+    log_audit(None, user_id, "toggle_notifications",
+              entity_type="user", entity_id=target_user_id,
+              details={"notifications_enabled": body.enabled})
+    return {"ok": True}
 
 
 @router.post("/platform/users/{target_user_id}/promote")

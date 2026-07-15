@@ -13,6 +13,7 @@ from openai import OpenAI
 from app.supabase_client import supabase
 from app.config import settings
 from app.settings_db import get_all_settings
+from app.services.org_service import notify_org_admins
 
 BENFORD_EXPECTED = {d: round(math.log10(1 + 1 / d), 4) for d in range(1, 10)}
 
@@ -329,6 +330,13 @@ def run_forensic_analysis(org_id: str | None = None):
                       f"LLM: {llm.get('total_flags', 0)} flags across {llm.get('batches', 0)} batches")
 
         total_flags = benford.get("total_flags", 0) + duplicates.get("total_flags", 0) + anomalies.get("total_flags", 0) + llm.get("total_flags", 0)
+
+        if total_flags > 0 and org_id:
+            notify_org_admins(org_id,
+                title=f"Forensic flags: {total_flags} issue(s) detected",
+                body=f"Analysis found {total_flags} flags: Benford={benford.get('total_flags', 0)}, Duplicates={duplicates.get('total_flags', 0)}, Anomalies={anomalies.get('total_flags', 0)}",
+                type="fraud_detected",
+                entity_type="forensic_run")
 
         _log(receipts[0].get("proof_id") or receipts[0]["id"], "forensic_analysis", "success",
              f"Forensic analysis complete — {total_flags} total flags (Benford: {benford.get('total_flags', 0)}, "

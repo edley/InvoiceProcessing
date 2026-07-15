@@ -17,6 +17,7 @@ type OrgContextValue = {
   orgs: OrgInfo[];
   currentOrg: OrgInfo | null;
   loading: boolean;
+  isPlatformAdmin: boolean;
   setCurrentOrg: (org: OrgInfo) => void;
   refresh: () => Promise<void>;
 };
@@ -25,6 +26,7 @@ const OrgContext = createContext<OrgContextValue>({
   orgs: [],
   currentOrg: null,
   loading: true,
+  isPlatformAdmin: false,
   setCurrentOrg: () => {},
   refresh: async () => {},
 });
@@ -33,6 +35,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   const [orgs, setOrgs] = useState<OrgInfo[]>([]);
   const [currentOrg, setCurrentOrgState] = useState<OrgInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
 
   const setCurrentOrg = useCallback((org: OrgInfo) => {
     setCurrentOrgState(org);
@@ -65,6 +68,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       }
       const body = await res.json();
       const items: any[] = body.items || [];
+      setIsPlatformAdmin(body.is_platform_admin === true);
 
       const mapped: OrgInfo[] = items.map((o: any) => ({
         id: o.id,
@@ -118,7 +122,7 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <OrgContext.Provider value={{ orgs, currentOrg, loading, setCurrentOrg, refresh }}>
+    <OrgContext.Provider value={{ orgs, currentOrg, loading, isPlatformAdmin, setCurrentOrg, refresh }}>
       {children}
     </OrgContext.Provider>
   );

@@ -70,7 +70,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 from app.routers import upload, proofs, erp, receipts, whatsapp, accounting, reconciliation
-from app.routers import dashboard, forensic, orgs, platform
+from app.routers import dashboard, forensic, orgs, platform, notifications
 import app.routers.settings as settings_router
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
@@ -85,6 +85,7 @@ app.include_router(dashboard.router, prefix="/api", tags=["dashboard"])
 app.include_router(forensic.router, prefix="/api", tags=["forensic"])
 app.include_router(orgs.router, prefix="/api", tags=["orgs"])
 app.include_router(platform.router, prefix="/api", tags=["platform"])
+app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 
 
 @app.get("/api/whatsapp/test")

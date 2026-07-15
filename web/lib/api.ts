@@ -343,6 +343,12 @@ export async function fetchPlatformStatus() {
   return res.json();
 }
 
+export async function fetchPlatformSummary() {
+  const res = await fetch(`${API_URL}/api/platform/summary`, { headers: orgHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch platform summary");
+  return res.json();
+}
+
 export async function fetchAllOrgs() {
   const res = await fetch(`${API_URL}/api/platform/orgs`, { headers: orgHeaders() });
   if (!res.ok) throw new Error("Failed to fetch all orgs");
@@ -402,5 +408,36 @@ export async function updateMemberPermissions(orgId: string, memberUserId: strin
     body: JSON.stringify({ permissions }),
   });
   if (!res.ok) throw new Error("Failed to update permissions");
+  return res.json();
+}
+
+// === Notifications API ===
+export async function fetchNotifications(page = 1, pageSize = 20) {
+  const res = await fetch(`${API_URL}/api/notifications?page=${page}&page_size=${pageSize}`, { headers: orgHeaders() });
+  if (!res.ok) throw new Error("Failed to fetch notifications");
+  return res.json();
+}
+
+export async function fetchUnreadCount() {
+  const res = await fetch(`${API_URL}/api/notifications/unread-count`, { headers: orgHeaders() });
+  if (!res.ok) return { count: 0 };
+  return res.json();
+}
+
+export async function markNotificationRead(id: string) {
+  await fetch(`${API_URL}/api/notifications/${id}/read`, { method: "PATCH", headers: orgHeaders() });
+}
+
+export async function markAllNotificationsRead() {
+  await fetch(`${API_URL}/api/notifications/read-all`, { method: "POST", headers: orgHeaders() });
+}
+
+export async function toggleUserNotifications(userId: string, enabled: boolean) {
+  const res = await fetch(`${API_URL}/api/platform/users/${userId}/notifications`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...orgHeaders() },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error("Failed to toggle notifications");
   return res.json();
 }

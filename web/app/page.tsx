@@ -3,13 +3,13 @@
 import { useEffect, useState, useRef, useCallback, Fragment } from "react";
 import { supabase } from "@/lib/supabase";
 import { useOrg, type OrgInfo } from "@/lib/org-context";
-import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, fetchReconciliationProgress, overrideReclassification, manualMatch, fetchAccountingEntries, createAccountingEntry, updateAccountingEntry, deleteAccountingEntry, fetchProcessingLogs, createOrg, fetchOrgInfo, fetchOrgMembers, inviteMember, updateMemberRole, removeMember, fetchPlatformStatus, fetchAllOrgs, fetchAllUsers, promotePlatformAdmin, demotePlatformAdmin, fetchAuditLog, fetchOrgAuditLog, updateMemberPermissions, addUserToOrg, fetchOrgDetail, updateOrg, deleteOrg, getApiHeaders, setApiHeaders } from "@/lib/api";
+import { uploadProof, updateReceipt, runReconciliation, fetchReconciliationStats, fetchReconciliationResults, fetchReconciliationProgress, overrideReclassification, manualMatch, fetchAccountingEntries, createAccountingEntry, updateAccountingEntry, deleteAccountingEntry, fetchProcessingLogs, createOrg, fetchOrgInfo, fetchOrgMembers, inviteMember, updateMemberRole, removeMember, fetchPlatformSummary, fetchAllOrgs, fetchAllUsers, promotePlatformAdmin, demotePlatformAdmin, fetchAuditLog, fetchOrgAuditLog, updateMemberPermissions, addUserToOrg, fetchOrgDetail, updateOrg, deleteOrg, getApiHeaders, setApiHeaders, fetchNotifications, fetchUnreadCount, markNotificationRead, markAllNotificationsRead, toggleUserNotifications } from "@/lib/api";
 import {
   Upload, FileText, Receipt, LogOut, RefreshCw, DollarSign, User, Hash, Calendar,
   Building2, CheckCircle, AlertCircle, UploadCloud, Edit3, Shield, AlertTriangle,
   ChevronDown, ChevronRight, Save, X, Loader2, Search, ExternalLink, BarChart3, Scale, Flag, Grip,
   Settings, ClipboardList, Menu, Database, Plus, Trash2, Filter, Check, History, Eye, ListChecks, UserCheck, Copy,
-  Users, Mail, Send, UserPlus, Building, ChevronsUpDown, Globe, MapPin, Phone, Info, XCircle, Play
+  Users, Mail, Send, UserPlus, Building, ChevronsUpDown, Globe, MapPin, Phone, Info, XCircle, Play, Bell
 } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -102,23 +102,7 @@ export default function HomePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const { orgs, currentOrg, setCurrentOrg, loading: orgLoading } = useOrg();
-
-  const [isPlatformAdmin, setIsPlatformAdmin] = useState<boolean | null>(null);
-
-  // Check platform status once auth + orgs are ready
-  useEffect(() => {
-    if (!user) return;
-    if (orgLoading) return;
-
-    const check = () => {
-      fetchPlatformStatus().then(r => {
-        setIsPlatformAdmin(r.is_platform_admin);
-        localStorage.setItem("is_platform_admin", String(r.is_platform_admin));
-      }).catch(() => setTimeout(check, 2000));
-    };
-    check();
-  }, [user, orgLoading]);
+  const { orgs, currentOrg, setCurrentOrg, loading: orgLoading, isPlatformAdmin } = useOrg();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -135,7 +119,6 @@ export default function HomePage() {
       } else if (event === "SIGNED_OUT") {
         setUser(null);
         localStorage.removeItem("user_id");
-        localStorage.removeItem("is_platform_admin");
         setApiHeaders(null, null);
       }
     });
@@ -161,12 +144,12 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    const items = getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions);
+    const items = getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions);
     const valid = items.some(i => i.key === tab);
     if (!valid) setTab("Dashboard");
   }, [currentOrg?.id, isPlatformAdmin, currentOrg?.role]);
 
-  if (loading) return <div className="flex min-h-screen items-center justify-center text-sm text-gray-500">Loading...</div>;
+  if (loading || orgLoading) return <div className="flex min-h-screen items-center justify-center text-sm text-gray-500">Loading...</div>;
   if (!user) return null;
 
   return (
@@ -196,7 +179,7 @@ export default function HomePage() {
               <button onClick={() => setMobileMenuOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
             </div>
             <nav className="py-2 px-2 overflow-y-auto flex-1">
-{getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions).map((item) => {
+{getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions).map((item) => {
                 const Icon = item.icon;
                 const active = tab === item.key;
                 return (
@@ -254,7 +237,7 @@ export default function HomePage() {
           )}
         </div>
         <nav className="flex-1 py-3 space-y-0.5 px-2 overflow-y-auto">
-          {getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions).map((item) => {
+          {getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions).map((item) => {
             const Icon = item.icon;
             const active = tab === item.key;
             return (
@@ -307,7 +290,7 @@ export default function HomePage() {
       {/* Desktop header + Main content */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="hidden md:flex bg-white px-4 lg:px-5 h-12 border-b border-gray-100 items-center justify-between sticky top-0 z-10">
-          <h2 className="text-sm font-semibold text-gray-800">{getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions).find(i => i.key === tab)?.label || tab}</h2>
+          <h2 className="text-sm font-semibold text-gray-800">{getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions).find(i => i.key === tab)?.label || tab}</h2>
           <div className="flex items-center gap-2">
             <div className="relative">
               <select value={currentOrg?.id || ""} onChange={(e) => {
@@ -333,6 +316,7 @@ export default function HomePage() {
               <span className="truncate max-w-[120px] hidden lg:inline">{user.email}</span>
             </div>
             <div className="h-4 w-px bg-gray-100" />
+            <NotificationBell />
             <button onClick={() => setShowSettings(true)}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-blue-400 hover:text-blue-600 rounded hover:bg-blue-50 transition-colors">
               <Settings size={13} />
@@ -345,7 +329,7 @@ export default function HomePage() {
         </header>
 
         <main className="flex-1 mx-auto w-full max-w-6xl px-3 sm:px-4 lg:px-6 py-4 sm:py-6 pb-20 md:pb-6">
-          {tab === "Dashboard" && <DashboardTab key={currentOrg?.id || "no-org"} user={user} onNavigate={(t: string, f?: string) => { setFilterState(f || ""); setTabKey(k => k + 1); setTab(t as Tab); }} />}
+          {tab === "Dashboard" && (isPlatformAdmin ? <PlatformDashboard /> : <DashboardTab key={currentOrg?.id || "no-org"} user={user} onNavigate={(t: string, f?: string) => { setFilterState(f || ""); setTabKey(k => k + 1); setTab(t as Tab); }} />)}
           {tab === "Upload" && <UploadTab user={user} />}
           {tab === "Proofs" && <ProofsTab key={`p-${tabKey}`} initialFilter={filterState} />}
           {tab === "Receipts" && <ReceiptsTab key={`r-${tabKey}`} initialFilter={filterState} user={user} />}
@@ -353,9 +337,9 @@ export default function HomePage() {
           {tab === "Forensic" && <ForensicTab />}
           {tab === "Entries" && <AccountingEntriesTab />}
           {tab === "Logs" && <ProcessingLogTab />}
-          {tab === "Company" && <CompanyProfileTab isPlatformAdmin={isPlatformAdmin === true} />}
+          {tab === "Company" && <CompanyProfileTab isPlatformAdmin={isPlatformAdmin} />}
           {tab === "Access" && <UserAccessTab />}
-          {tab === "Team" && (isPlatformAdmin === true ? <PlatformAdminPanel user={user} /> : <TeamTab user={user} isPlatformAdmin={false} />)}
+          {tab === "Team" && (isPlatformAdmin ? <PlatformAdminPanel user={user} /> : <TeamTab user={user} isPlatformAdmin={false} />)}
           {tab === "Audit" && <AuditTab user={user} />}
         </main>
       </div>
@@ -364,7 +348,7 @@ export default function HomePage() {
 
       {/* Mobile bottom nav */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-20 bg-white/90 backdrop-blur-md border-t border-gray-200/60 flex items-center justify-around px-1 pb-safe-or-0" style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}>
-        {getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions).slice(0, 5).map((item) => {
+        {getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions).slice(0, 5).map((item) => {
           const Icon = item.icon;
           const active = tab === item.key;
           return (
@@ -375,7 +359,7 @@ export default function HomePage() {
             </button>
           );
         })}
-        {getSidebarItems(currentOrg?.role || null, isPlatformAdmin ?? false, currentOrg?.permissions).length > 5 && (
+        {getSidebarItems(currentOrg?.role || null, isPlatformAdmin, currentOrg?.permissions).length > 5 && (
           <button onClick={() => setMobileMenuOpen(true)}
             className="flex flex-col items-center gap-0.5 py-2 px-2 text-blue-400">
             <Menu size={18} />
@@ -725,7 +709,7 @@ function CompanyProfileTab({ isPlatformAdmin }: { isPlatformAdmin?: boolean }) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const isPlatform = isPlatformAdmin === true;
+  const isPlatform = isPlatformAdmin;
 
   const [form, setForm] = useState({
     name: "", legal_name: "", email: "", phone: "", fax: "", website: "",
@@ -2315,6 +2299,295 @@ function OrgAdminDashboard({ user }: { user: any }) {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function NotificationBell() {
+  const [unread, setUnread] = useState(0);
+  const [open, setOpen] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [u, n] = await Promise.all([
+        fetchUnreadCount(),
+        fetchNotifications(1, 10),
+      ]);
+      setUnread(u.count || 0);
+      setNotifications(n.items || []);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  function timeAgo(ts: string) {
+    if (!ts) return "";
+    const sec = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+    if (sec < 60) return "now";
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h`;
+    return `${Math.floor(hr / 24)}d`;
+  }
+
+  function typeIcon(type: string) {
+    switch (type) {
+      case "review_needed": return <AlertTriangle size={11} className="text-amber-500" />;
+      case "fraud_detected": return <Shield size={11} className="text-red-500" />;
+      case "upload_failed": return <XCircle size={11} className="text-red-400" />;
+      default: return <Info size={11} className="text-blue-400" />;
+    }
+  }
+
+  async function handleMarkAllRead() {
+    await markAllNotificationsRead();
+    setUnread(0);
+    setNotifications(n => n.map(n => ({ ...n, is_read: true })));
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => { load(); setOpen(!open); }}
+        className="relative flex items-center px-2 py-1 text-blue-400 hover:text-blue-600 rounded hover:bg-blue-50 transition-colors">
+        <Bell size={13} />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white text-[7px] font-bold leading-none">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-72 bg-white rounded-lg border shadow-lg z-50">
+          <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-gray-100">
+            <h3 className="text-[11px] font-semibold text-gray-700">Notifications</h3>
+            {unread > 0 && (
+              <button onClick={handleMarkAllRead} className="text-[9px] text-blue-500 hover:text-blue-700">Mark all read</button>
+            )}
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {notifications.length === 0 && (
+              <div className="px-2.5 py-4 text-[10px] text-gray-400 text-center">No notifications</div>
+            )}
+            {notifications.map((n: any) => (
+              <div key={n.id} className={`px-2.5 py-2 flex items-start gap-2 border-b border-gray-50 hover:bg-gray-50/50 ${n.is_read ? "" : "bg-blue-50/30"}`}>
+                <div className="mt-0.5">{typeIcon(n.type)}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-medium text-gray-800 truncate">{n.title}</p>
+                  {n.body && <p className="text-[9px] text-gray-500 truncate">{n.body}</p>}
+                </div>
+                <span className="text-[8px] text-gray-400 shrink-0 mt-0.5">{timeAgo(n.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlatformDashboard() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPlatformSummary().then(setData).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="p-8 text-center text-gray-400 text-sm">Loading platform overview...</div>;
+  if (!data) return <div className="p-8 text-center text-red-400 text-sm">Failed to load platform data</div>;
+
+  const cards = [
+    { label: "Companies", value: data.total_companies, color: "bg-blue-500" },
+    { label: "Users", value: data.total_users, color: "bg-emerald-500" },
+    { label: "Admins", value: data.platform_admins, color: "bg-amber-500" },
+    { label: "Today", value: data.activity_today, color: "bg-violet-500" },
+  ];
+
+  function timeAgo(ts: string) {
+    if (!ts) return "";
+    const sec = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+    if (sec < 60) return "just now";
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
+  function actionLabel(action: string) {
+    const map: Record<string, string> = {
+      create_org: "org created",
+      add_member: "member added",
+      remove_member: "member removed",
+      update_role: "role updated",
+      update_permissions: "permissions updated",
+      promote_to_platform_admin: "promoted to admin",
+      demote_from_platform_admin: "demoted from admin",
+      upload_proof: "proof uploaded",
+    };
+    return map[action] || action.replace(/_/g, " ");
+  }
+
+  return (
+    <div className="h-full flex flex-col min-h-0">
+      <div className="flex-1 overflow-y-auto min-h-0 space-y-2 pr-1">
+        <div className="rounded-lg border bg-gradient-to-r from-blue-600 to-indigo-700 p-3 text-white shadow-sm">
+          <p className="text-blue-100 text-[9px] font-medium uppercase tracking-wider">Platform Overview</p>
+          <h1 className="text-lg font-bold mt-0.5">Superuser Dashboard</h1>
+        </div>
+
+        {/* Stat cards */}
+        <div className="grid grid-cols-4 gap-2">
+          {cards.map((c) => (
+            <div key={c.label} className="rounded-lg border bg-white p-2.5 shadow-sm">
+              <div className="flex items-center gap-1.5 mb-1">
+                <div className={`w-1.5 h-1.5 rounded-full ${c.color}`} />
+                <span className="text-[10px] text-gray-500 font-medium">{c.label}</span>
+              </div>
+              <span className="text-xl font-bold text-gray-800">{c.value}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Companies + Users tables */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Companies */}
+          <div className="rounded-lg border bg-white shadow-sm">
+            <div className="px-2.5 py-1.5 border-b border-gray-100">
+              <h3 className="text-[11px] font-semibold text-gray-700">Companies ({data.companies?.length || 0})</h3>
+            </div>
+            <div className="overflow-y-auto max-h-[220px]">
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-gray-400 uppercase tracking-wider border-b border-gray-50">
+                    <th className="text-left px-2.5 py-1 font-medium">Name</th>
+                    <th className="text-center px-2 py-1 font-medium">Members</th>
+                    <th className="text-center px-2 py-1 font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.companies || []).map((org: any) => (
+                    <tr key={org.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                      <td className="px-2.5 py-1.5 font-medium text-gray-800">{org.name}</td>
+                      <td className="text-center px-2 py-1.5 text-gray-600">{org.member_count}</td>
+                      <td className="text-center px-2 py-1.5">
+                        <span className={`inline-block px-1.5 py-0.5 rounded-full text-[9px] font-medium ${
+                          org.status === "active"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-gray-100 text-gray-500"
+                        }`}>
+                          {org.status || "active"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Users */}
+          <div className="rounded-lg border bg-white shadow-sm">
+            <div className="px-2.5 py-1.5 border-b border-gray-100">
+              <h3 className="text-[11px] font-semibold text-gray-700">Users ({data.users?.length || 0})</h3>
+            </div>
+            <div className="overflow-y-auto max-h-[220px]">
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-gray-400 uppercase tracking-wider border-b border-gray-50">
+                    <th className="text-left px-2.5 py-1 font-medium">Name</th>
+                    <th className="text-center px-2 py-1 font-medium">Orgs</th>
+                    <th className="text-center px-2 py-1 font-medium">Role</th>
+                    <th className="text-center px-2 py-1 font-medium">Notif</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.users || []).map((u: any) => (
+                    <tr key={u.user_id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                      <td className="px-2.5 py-1.5">
+                        <div className="flex items-center gap-1">
+                          <span className="font-medium text-gray-800 truncate max-w-[120px]">{u.display_name || u.email || u.user_id.slice(0, 8)}</span>
+                          {u.is_platform_admin && (
+                            <span className="px-1 py-0.5 rounded bg-amber-100 text-amber-700 text-[8px] font-bold">PA</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="text-center px-2 py-1.5 text-gray-600">{u.orgs?.length || 0}</td>
+                      <td className="text-center px-2 py-1.5">
+                        {u.orgs?.slice(0, 2).map((o: any) => (
+                          <span key={o.id} className={`inline-block mr-0.5 px-1 py-0.5 rounded text-[9px] font-medium ${
+                            o.role === "admin" ? "bg-blue-50 text-blue-700"
+                            : o.role === "manager" ? "bg-emerald-50 text-emerald-700"
+                            : "bg-gray-100 text-gray-600"
+                          }`}>{o.role[0]}</span>
+                        ))}
+                        {(u.orgs?.length || 0) > 2 && (
+                          <span className="text-[9px] text-gray-400">+{u.orgs.length - 2}</span>
+                        )}
+                      </td>
+                      <td className="text-center px-2 py-1.5">
+                        <button
+                          onClick={async () => {
+                            await toggleUserNotifications(u.user_id, !u.notifications_enabled);
+                            u.notifications_enabled = !u.notifications_enabled;
+                            setData(prev => ({ ...prev }));
+                          }}
+                          className={`p-1 rounded transition-colors ${
+                            u.notifications_enabled !== false
+                              ? "text-blue-500 hover:text-blue-700 hover:bg-blue-50"
+                              : "text-gray-300 hover:text-gray-500 hover:bg-gray-100"
+                          }`}
+                          title={u.notifications_enabled !== false ? "Notifications on" : "Notifications off"}
+                        >
+                          <Bell size={12} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Recent Activity */}
+        <div className="rounded-lg border bg-white shadow-sm">
+          <div className="px-2.5 py-1.5 border-b border-gray-100">
+            <h3 className="text-[11px] font-semibold text-gray-700">Recent Activity</h3>
+          </div>
+          <div className="divide-y divide-gray-50 max-h-[180px] overflow-y-auto">
+            {(data.recent_activity || []).length === 0 && (
+              <div className="px-2.5 py-3 text-[10px] text-gray-400 text-center">No recent activity</div>
+            )}
+            {(data.recent_activity || []).map((e: any, i: number) => (
+              <div key={i} className="px-2.5 py-1.5 flex items-center justify-between hover:bg-gray-50/50">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-gray-700">{actionLabel(e.action)}</span>
+                  <span className="text-[9px] text-gray-400">by</span>
+                  <span className="text-[9px] font-medium text-gray-500">{e.user_id?.slice(0, 8)}</span>
+                  {e.org_id && <span className="text-[9px] text-gray-400">in org {e.org_id?.slice(0, 6)}</span>}
+                </div>
+                <span className="text-[9px] text-gray-400 shrink-0">{timeAgo(e.created_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ from app.supabase_client import supabase
 from app.config import settings
 from app.services.llm_extractor import extract_with_llm, llm_fallback_extract
 from app.services.document_classifier import classify_document, is_receipt_type
+from app.services.org_service import notify_org_admins
 from app.settings_db import get_all_settings
 from datetime import datetime
 
@@ -214,6 +215,13 @@ def process_proof(proof_id: str) -> dict:
              f"source={source} proof_status={proof_status} receipt_status={receipt_status} confidence={extracted.get('confidence')}",
              org_id=p_org_id)
 
+        if proof_status == "review_needed":
+            notify_org_admins(p_org_id,
+                title="Receipt needs review",
+                body=f"Proof #{proof_id[:8]} has low-confidence extraction and needs manual review",
+                type="review_needed",
+                entity_type="proof", entity_id=proof_id)
+
         receipt = {
             "org_id": proof.get("org_id"),
             "proof_id": proof_id,
@@ -282,4 +290,10 @@ def process_proof(proof_id: str) -> dict:
             "status": "failed",
             "error_message": str(e),
         }).eq("id", proof_id).execute()
+        if p_org_id:
+            notify_org_admins(p_org_id,
+                title="Proof processing failed",
+                body=f"Proof #{proof_id[:8]} failed: {str(e)[:200]}",
+                type="upload_failed",
+                entity_type="proof", entity_id=proof_id)
         raise

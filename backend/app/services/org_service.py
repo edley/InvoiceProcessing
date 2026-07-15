@@ -176,7 +176,7 @@ def list_all_users() -> list[dict]:
 
     profile_map = {}
     try:
-        profile_resp = supabase.table("user_profiles").select("id, display_name, is_platform_admin").execute()
+        profile_resp = supabase.table("user_profiles").select("id, display_name, is_platform_admin, notifications_enabled").execute()
         for p in (profile_resp.data or []):
             profile_map[p["id"]] = p
     except Exception:
@@ -197,6 +197,7 @@ def list_all_users() -> list[dict]:
             "display_name": display_name,
             "email": email,
             "is_platform_admin": pdata.get("is_platform_admin", False),
+            "notifications_enabled": pdata.get("notifications_enabled", True),
         })
 
     return items
@@ -320,3 +321,37 @@ def query_audit_log(org_id: str | None = None, user_id: str | None = None,
         q = q.eq("action", action)
     result = q.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     return result.data or []
+
+
+def create_notification(org_id: str, user_id: str, title: str, body: str | None = None,
+                        type: str = "info", entity_type: str | None = None,
+                        entity_id: str | None = None):
+    try:
+        supabase.table("notifications").insert({
+            "org_id": org_id,
+            "user_id": user_id,
+            "title": title,
+            "body": body,
+            "type": type,
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+        }).execute()
+    except Exception:
+        pass
+
+
+def notify_org_admins(org_id: str, title: str, body: str | None = None,
+                      type: str = "info", entity_type: str | None = None,
+                      entity_id: str | None = None):
+    try:
+        members = supabase.table("organization_members").select("user_id").eq(
+            "org_id", org_id
+        ).eq("role", "admin").execute()
+        for m in (members.data or []):
+            uid = m["user_id"]
+            pref = supabase.table("user_profiles").select("notifications_enabled").eq("id", uid).limit(1).execute()
+            if pref.data and pref.data[0].get("notifications_enabled") is False:
+                continue
+            create_notification(org_id, uid, title, body, type, entity_type, entity_id)
+    except Exception:
+        pass

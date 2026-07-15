@@ -77,7 +77,7 @@ def list_orgs(request: Request):
         except Exception:
             pass
 
-    return {"items": orgs}
+    return {"items": orgs, "is_platform_admin": is_platform_admin(user_id)}
 
 
 @router.post("/orgs", status_code=201)
